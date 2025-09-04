@@ -4,15 +4,8 @@ if(POLICY CMP0144)
   cmake_policy(SET CMP0144 NEW)
 endif()
 
-# We use header only libraries
-if(${CMAKE_VERSION} VERSION_LESS "3.30")
-  find_package(Boost REQUIRED)
-else()
-  find_package(Boost CONFIG REQUIRED)
-endif()
-
-message("-- Boost version: ${Boost_VERSION}")
-message("-- Boost include dir:${Boost_INCLUDE_DIRS}")
+set(Boost_INCLUDE_DIRS C:/Program\ Files/boost/boost_1_88_0)
+set(Boost_VERSION 1.71.0)
 
 # Some later versions of boost spews warnings form property_tree
 # but can be disabled with this setting

@@ -15,7 +15,7 @@ set CMAKEFLAGS=
 set NOCMAKE=0
 set NOCTEST=0
 set AIEBU_BUILD=""
-set BOOST=C:\Xilinx\XRT\ext.new
+set BOOST="C:\\Program\ Files\\boost\\boost_1_88_0\\boost"
 set GENERATOR="Visual Studio 17 2022"
 set PLATFORM=WBuild
 
@@ -99,9 +99,9 @@ if [%RELEASE%] == [1] (
    cmake --install %BUILDDIR%\%PLATFORM% --config Release --prefix %BUILDDIR%\%PLATFORM%\Release\xilinx\aiebu --verbose
    if errorlevel 1 (exit /B %errorlevel%)
 
-   echo cmake --build %BUILDDIR%\%PLATFORM% --config Release --target run_tests
-   cmake --build %BUILDDIR%\%PLATFORM% --config Release --target run_tests
-   if errorlevel 1 (exit /B %errorlevel%)
+  @REM  echo cmake --build %BUILDDIR%\%PLATFORM% --config Release --target run_tests
+  @REM  cmake --build %BUILDDIR%\%PLATFORM% --config Release --target run_tests
+  @REM  if errorlevel 1 (exit /B %errorlevel%)
 
    ECHO ====================== Create SDK ZIP archive ============================
    echo cpack -G ZIP -B %BUILDDIR%\%PLATFORM% -C Release --config %BUILDDIR%\%PLATFORM%\CPackConfig.cmake

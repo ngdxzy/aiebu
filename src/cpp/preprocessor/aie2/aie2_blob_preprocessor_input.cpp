@@ -734,12 +734,12 @@ add_preemption_code(uint32_t col)
     const char *ptr = (mc_code.data());
     auto txn_header = reinterpret_cast<const XAie_TxnHeader *>(ptr);
 
-    printf("Header version %d.%d\n", txn_header->Major, txn_header->Minor);
-    printf("Device Generation: %d\n", txn_header->DevGen);
-    printf("Cols, Rows, NumMemRows : (%d, %d, %d)\n", txn_header->NumCols,
-         txn_header->NumRows, txn_header->NumMemTileRows);
-    printf("TransactionSize: %u\n", txn_header->TxnSize);
-    printf("NumOps: %u\n", txn_header->NumOps);
+    // printf("Header version %d.%d\n", txn_header->Major, txn_header->Minor);
+    // printf("Device Generation: %d\n", txn_header->DevGen);
+    // printf("Cols, Rows, NumMemRows : (%d, %d, %d)\n", txn_header->NumCols,
+    //      txn_header->NumRows, txn_header->NumMemTileRows);
+    // printf("TransactionSize: %u\n", txn_header->TxnSize);
+    // printf("NumOps: %u\n", txn_header->NumOps);
 
     /**
      * Check if Header Version is 1.0 then call optimized API else continue with this
