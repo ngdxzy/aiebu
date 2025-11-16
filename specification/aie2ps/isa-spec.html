@@ -104,6 +104,7 @@
 <li><a href="#start_job-0x00">START_JOB (0x00)</a></li>
 <li><a href="#start_job_deferred-0x17">START_JOB_DEFERRED (0x17)</a></li>
 <li><a href="#launch_job-0x18">LAUNCH_JOB (0x18)</a></li>
+<li><a href="#start_cond_job_preempt-0x1f">START_COND_JOB_PREEMPT (0x1f)</a></li>
 <li><a href="#uc_dma_write_des-0x01">UC_DMA_WRITE_DES (0x01)</a></li>
 <li><a href="#wait_uc_dma-0x02">WAIT_UC_DMA (0x02)</a></li>
 <li><a href="#mask_write_32-0x03">MASK_WRITE_32 (0x03)</a></li>
@@ -504,7 +505,7 @@ Global registers <code>r8..r23</code> also have alias name <code>g0..g15</code><
 There are 2 types of barrier provided, local_barrier and remote_barrier.
 Barrier <code>lb0..lb15</code>, which essentially are integer 0..15, are local barriers
 which are used for synchronization across jobs running in same <em>job-runner</em>.
-Barrier <code>rb0..rb63</code>, which essentially are integer 1..64, are remote barriers
+Barrier <code>rb0..rb7</code>, which essentially are integer 1..8, are remote barriers
 which are used for synchronization across jobs running on different <em>job-runner</em>.</p>
 <h2 id="const">const</h2>
 <p>Constant number. The width is specified per-operand and should be 8, 16 or 32 bit.</p>
@@ -601,6 +602,35 @@ This operation might only be called once per job. Launching the same job multipl
 times is undefined behavior.
 The newly launched job will be first scheduled for the next scheduling cycle and
 the current job will continue to run until encountering a blocking operation.</p>
+<h2 id="start_cond_job_preempt-0x1f">START_COND_JOB_PREEMPT (0x1f)</h2>
+<p>Indicates a new job which can be conditionally started according to preemption.</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: center;">0x1f</th>
+<th>-</th>
+<th>job_id</th>
+<th>size</th>
+<th>-</th>
+<th style="text-align: right;">instruction size</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: center;">opcode (8b)</td>
+<td>pad (8b)</td>
+<td>const (16b)</td>
+<td>jobsize (16b)</td>
+<td>pad (16b)</td>
+<td style="text-align: right;">8B</td>
+</tr>
+</tbody>
+</table>
+<p>Indicates the start of a new job and creates a new entry in the job table,
+if preemption flag has been set. The flag is cleared when preemption is
+checked, and is set if preemption happens.
+The job size is auto-calculated and inserted by the assembler and not supplied
+explicitly by the user.</p>
 <h2 id="uc_dma_write_des-0x01">UC_DMA_WRITE_DES (0x01)</h2>
 <p>Enqueues a DM2MM uC-DMA transfer and returns a wait handle for it.</p>
 <table>
@@ -1108,7 +1138,9 @@ stored in the <code>dest</code> register.</p>
 </table>
 <p><code>local_barrier_id</code> indicates a barrier resource that is used to synchronize <code>num_participants</code>
 number of jobs. <em>All</em> participating jobs must reach this barrier before any participating job
-can move forward. A job which executes this instruction is blocked till the barrier matures.</p>
+can move forward. A job which executes this instruction is blocked till the barrier matures. Example:</p>
+<pre><code>LOCAL_BARRIER       $lb0, 2
+</code></pre>
 <h2 id="remote_barrier-0x12">REMOTE_BARRIER (0x12)</h2>
 <p>Remote barrier used to synchronize multiple columns.</p>
 <table>
@@ -1137,7 +1169,9 @@ can move forward. A job which executes this instruction is blocked till the barr
 columns. <em>All</em> participating jobs must reach this barrier before any participating job can move forward.
 A job which executes this instruction is blocked till the barrier matures. <code>party_mask</code> is the bit map of
 participant columns, where each column takes the bit corresponding to its column index. For any specific
-remote barrier, only one job in a column can participate in.</p>
+remote barrier, only one job in a column can participate in. Example:</p>
+<pre><code>REMOTE_BARRIER      $rb0, 0xC
+</code></pre>
 <h2 id="eof-0xff">EOF (0xff)</h2>
 <p>Indicates the end of the operation sequence.</p>
 <table>

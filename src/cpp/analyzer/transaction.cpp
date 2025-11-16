@@ -14,6 +14,7 @@
 
 #include "xaiengine.h"
 #include "transaction.hpp"
+#include "code_section.h"
 
 namespace {
 static const std::array<std::string_view, 5> preempt_code_table{"#NOOP",
@@ -22,8 +23,8 @@ static const std::array<std::string_view, 5> preempt_code_table{"#NOOP",
                                                                 "#AIE_REGISTERS",
                                                                 "#INVALID"};
 
-constexpr uint8_t MAJOR_VER = 1;
-constexpr uint8_t MINOR_VER = 0;
+constexpr uint8_t MAJOR_VER = aiebu::AIE2P_OPT_MAJOR_VER;
+constexpr uint8_t MINOR_VER = aiebu::AIE2P_OPT_MINOR_VER;
 }
 
 template <unsigned int N>
@@ -311,7 +312,7 @@ private:
     size_t stringify_loadpdi(const XAie_OpHdr *ptr, std::ostream &ss_ops_) const {
         auto mp_header = (const XAie_LoadPdiHdr *)(ptr);
         ss_ops_ << op_format << "XAIE_IO_LOADPDI " << "#" <<  std::dec << mp_header->PdiId << ", 0x" <<
-                   mp_header->PdiSize << "0x" << mp_header->PdiAddress << std::endl;
+                   mp_header->PdiSize << ", 0x" << mp_header->PdiAddress << std::endl;
         return sizeof(XAie_LoadPdiHdr);
     }
 

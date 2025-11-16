@@ -155,7 +155,7 @@ Global registers `r8..r23` also have alias name `g0..g15`
 There are 2 types of barrier provided, local_barrier and remote_barrier.
 Barrier `lb0..lb15`, which essentially are integer 0..15, are local barriers
 which are used for synchronization across jobs running in same _job-runner_.
-Barrier `rb0..rb63`, which essentially are integer 1..64, are remote barriers
+Barrier `rb0..rb7`, which essentially are integer 1..8, are remote barriers
 which are used for synchronization across jobs running on different _job-runner_.
 
 
@@ -226,6 +226,21 @@ This operation might only be called once per job. Launching the same job multipl
 times is undefined behavior.
 The newly launched job will be first scheduled for the next scheduling cycle and
 the current job will continue to run until encountering a blocking operation.
+
+
+## START_COND_JOB_PREEMPT (0x1f)
+
+Indicates a new job which can be conditionally started according to preemption.
+
+| 0x1f | - | job_id | size | - | instruction size |
+| :-: | - | - | - | - | -: |
+| opcode (8b) | pad (8b) | const (16b) | jobsize (16b) | pad (16b) | 8B |
+
+Indicates the start of a new job and creates a new entry in the job table,
+if preemption flag has been set. The flag is cleared when preemption is
+checked, and is set if preemption happens.
+The job size is auto-calculated and inserted by the assembler and not supplied
+explicitly by the user.
 
 
 ## UC_DMA_WRITE_DES (0x01)
@@ -531,7 +546,10 @@ Local barrier used to synchronize multiple jobs.
 
 `local_barrier_id` indicates a barrier resource that is used to synchronize `num_participants`
 number of jobs. _All_ participating jobs must reach this barrier before any participating job
-can move forward. A job which executes this instruction is blocked till the barrier matures.
+can move forward. A job which executes this instruction is blocked till the barrier matures. Example:
+```
+LOCAL_BARRIER       $lb0, 2
+```
 
 
 ## REMOTE_BARRIER (0x12)
@@ -546,7 +564,10 @@ Remote barrier used to synchronize multiple columns.
 columns. _All_ participating jobs must reach this barrier before any participating job can move forward.
 A job which executes this instruction is blocked till the barrier matures. `party_mask` is the bit map of
 participant columns, where each column takes the bit corresponding to its column index. For any specific
-remote barrier, only one job in a column can participate in.
+remote barrier, only one job in a column can participate in. Example:
+```
+REMOTE_BARRIER      $rb0, 0xC
+```
 
 
 ## EOF (0xff)
