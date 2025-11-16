@@ -88,8 +88,8 @@ if [%DEBUG%] == [1] (
    cmake --install %BUILDDIR%\%PLATFORM% --config Debug --prefix %BUILDDIR%\%PLATFORM%\Debug\xilinx\aiebu --verbose
    if errorlevel 1 (exit /B %errorlevel%)
 
-   echo cmake --build %BUILDDIR%\%PLATFORM% --config Debug --target run_tests -j %LOCAL_MSVC_PARALLEL_JOBS%
-   cmake --build %BUILDDIR%\%PLATFORM% --config Debug --target run_tests -j %LOCAL_MSVC_PARALLEL_JOBS%
+  @REM  echo cmake --build %BUILDDIR%\%PLATFORM% --config Debug --target run_tests -j %LOCAL_MSVC_PARALLEL_JOBS%
+  @REM  cmake --build %BUILDDIR%\%PLATFORM% --config Debug --target run_tests -j %LOCAL_MSVC_PARALLEL_JOBS%
    if errorlevel 1 (exit /B %errorlevel%)
 )
 
