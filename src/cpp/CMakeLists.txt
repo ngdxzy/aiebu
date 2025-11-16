@@ -2,7 +2,7 @@
 # Copyright (C) 2024-2025, Advanced Micro Devices, Inc. All rights reserved.
 
 # In arm compiler we dont have static libs so not building utility
-if (AIEBU_NATIVE_BUILD)
+if (AIEBU_NATIVE_BUILD OR ${CMAKE_SYSTEM_PROCESSOR} STREQUAL ARM64)
   add_subdirectory(utils)
 endif()
 
@@ -10,6 +10,8 @@ add_library(aiebu_library_objects OBJECT
   analyzer/reporter.cpp
   analyzer/transaction.cpp
   analyzer/packets.cpp
+  analyzer/passmanager.cpp
+  analyzer/aie2p_passes.cpp
   assembler/aiebu_assembler.cpp
   assembler/assembler.cpp
   common/aiebu_error.cpp
@@ -36,12 +38,12 @@ target_include_directories(aiebu_library_objects
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/include
   ${AIEBU_SOURCE_DIR}
-  ${AIEBU_AIE_RT_HEADER_DIR}
+  ${AIEBU_ELFIO_SRC_DIR}
+  ${AIEBU_AIE-RT_HEADER_DIR}
   ${AIEBU_BINARY_DIR}/${CMAKE_INSTALL_LIBDIR}
   ${Boost_INCLUDE_DIRS}
 
   # The following should be spelled out in code
-  ${CMAKE_CURRENT_SOURCE_DIR}/ELFIO
   ${CMAKE_CURRENT_SOURCE_DIR}/preprocessor
   ${CMAKE_CURRENT_SOURCE_DIR}/preprocessor/aie2
   ${CMAKE_CURRENT_SOURCE_DIR}/encoder
@@ -116,3 +118,6 @@ install(FILES
   DESTINATION ${AIEBU_INSTALL_INCLUDE_DIR}/aiebu
   CONFIGURATIONS Debug Release COMPONENT ${AIEBU_DEV_COMPONENT}
 )
+
+# Build dynamic tracing library
+add_subdirectory(dtrace)

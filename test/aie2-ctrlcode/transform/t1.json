@@ -1,0 +1,25 @@
+{
+  "_comment": "Each top level pass object specifies the section name for which the top level pass object is applicable and an array of passes where keyword pass specfifies the pass name with additional pass specific details",
+  "allpasses": [
+    {
+      "section": ".ctrltext",
+      "passes": [
+	{
+	  "pass": "null"
+	},
+	{
+	  "pass": "loadpdi",
+	  "pdiid": 10,
+	  "pdisize": 800
+	},
+	{
+	  "pass": "print",
+	  "sync": "console"
+	},
+	{
+	  "pass": "nopreempt"
+	}
+      ]
+    }
+  ]
+}
