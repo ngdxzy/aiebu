@@ -246,7 +246,7 @@ private:
          * function to service the TXN buffer.
          */
         if ((Hdr->Major == MAJOR_VER) && (Hdr->Minor == MINOR_VER)) {
-            std::cout << "Optimized HEADER version detected \n";
+            // std::cout << "Optimized HEADER version detected \n";
             count_tnx_opt(ptr, op_count);
         } else {
             count_tnx(ptr, op_count);
@@ -661,7 +661,7 @@ ss_ops_ << op_format << "XAIE_IO_MASKPOLL_BUSY " << "@0x" << std::hex << mp_head
          * function to service the TXN buffer.
          */
         if ((Hdr->Major == MAJOR_VER) && (Hdr->Minor == MINOR_VER)) {
-            std::cout << "Optimized HEADER version detected \n";
+            // std::cout << "Optimized HEADER version detected \n";
             return stringify_txn_opt();
         } else {
             return stringify_txn();

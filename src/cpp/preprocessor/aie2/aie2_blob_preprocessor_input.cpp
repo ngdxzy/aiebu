@@ -24,7 +24,7 @@ add_preemption_code(uint32_t col)
     auto error_msg = boost::format("Preemption save/restore code for not available for txn buffer with col:(%d)\n") % col;
     throw error(error::error_code::invalid_asm, error_msg.str());
   }
-  std::cout << "Save/Restore preemption code added for col" << col << "\n";
+  // std::cout << "Save/Restore preemption code added for col" << col << "\n";
   m_data[preempt_save].resize(stx_save_restore_map.at(col).first.size());
   std::memcpy(m_data[preempt_save].data(), stx_save_restore_map.at(col).first.data(), stx_save_restore_map.at(col).first.size());
 
@@ -746,7 +746,7 @@ add_preemption_code(uint32_t col)
      * function to service the TXN buffer.
      */
     if ((txn_header->Major == MAJOR_VER) && (txn_header->Minor == MINOR_VER)) {
-        printf("Optimized HEADER version detected \n");
+        // printf("Optimized HEADER version detected \n");
         return process_txn_opt(ptr, mc_code, section_name, argname);
     }
     return process_txn(ptr, mc_code, section_name, argname);
