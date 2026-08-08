@@ -9,6 +9,8 @@
 #include "utils.h"
 #include "file_utils.h"
 #include "preprocessor_input.h"
+#include "asm/asm_parser.h"
+#include "logger.h"
 #include <boost/format.hpp>
 #include <boost/property_tree/json_parser.hpp>
 
@@ -77,6 +79,8 @@ protected:
                                     const boost::property_tree::ptree& _pt);
   void extract_coalesed_buffers(const std::string& name, const boost::property_tree::ptree& _pt);
   void clear_shimBD_address_bits(std::vector<char>& mc_code, uint32_t offset) const;
+  void patch_shim48_addend(std::vector<char>& mc_code, uint32_t offset, uint64_t addend) const;
+  void patch_ctrl48_addend(std::vector<char>& buf, uint32_t offset, uint64_t addend) const;
   void validate_json(uint32_t offset, uint32_t size, uint32_t arg_index, offset_type type) const;
   uint32_t get_32_bit_property(const boost::property_tree::ptree& pt, const std::string& property, bool defaultvalue = false) const;
   void add_preemption_code(uint32_t col);
@@ -99,14 +103,31 @@ public:
                         const std::vector<char>& control_packet,
                         const std::vector<std::string>& libs,
                         const std::vector<std::string>& /*libpaths*/,
-                        const std::map<uint32_t, std::vector<char> >& ctrlpkt) override
+                        const std::map<uint32_t, std::vector<char> >& ctrlpkt,
+                        const file_artifact* /*resolver*/ = nullptr) override
   {
+    const std::string loglevel_prefix = "loglevel_";
+   
     for (const auto& lib: libs)
     {
       if (lib == legacydpuxclbin)
         arg_offset = 1;
+      else if (lib.find(loglevel_prefix) == 0) {
+        // Process log level for library API users
+        std::string log_level_str = lib.substr(loglevel_prefix.size());
+        if (log_level_str == "error")
+          set_log_level(log_level::error);
+        else if (log_level_str == "warn")
+          set_log_level(log_level::warn);
+        else if (log_level_str == "info")
+          set_log_level(log_level::info);
+        else if (log_level_str == "debug")
+          set_log_level(log_level::debug);
+        else
+          log_warn() << "Invalid log level flag: " << lib << ", ignored";
+      }
       else
-        std::cout << "Invalid flag: " << lib << ", ignored !!!" << std::endl;
+        log_warn() << "Invalid flag: " << lib << ", ignored";
     }
 
     m_data[".ctrltext"] = mc_code;
@@ -140,7 +161,8 @@ public:
                        const std::vector<std::string>& /*flags*/,
                        const std::vector<std::string>& /*libpaths*/,
                        const std::vector<uint32_t>& pmid_list,
-                       const std::vector<std::string>& pdi_list)
+                       const std::vector<std::string>& pdi_list,
+                       const file_artifact* /*resolver*/ = nullptr)
   {
     arg_offset = 0;
     m_data[".ctrltext"] = mc_code;
@@ -214,7 +236,8 @@ public:
                         const std::vector<char>& control_packet,
                         const std::vector<std::string>& libs,
                         const std::vector<std::string>& libpaths,
-                        const std::map<uint32_t, std::vector<char> >& ctrlpkt) override
+                        const std::map<uint32_t, std::vector<char> >& ctrlpkt,
+                        const file_artifact* /*resolver*/ = nullptr) override
   {
     aie2_blob_preprocessor_input::set_args(mc_code, patch_json, control_packet, libs, libpaths, ctrlpkt);
     resize_scratchpad(preempt_save);
@@ -227,7 +250,8 @@ public:
                 const std::vector<std::string>& flags,
                 const std::vector<std::string>& libpaths,
                 const std::vector<uint32_t>& pmid_list,
-                const std::vector<std::string>& pdi_list) override
+                const std::vector<std::string>& pdi_list,
+                const file_artifact* /*resolver*/ = nullptr) override
   {
     aie2_blob_preprocessor_input::set_args(mc_code, patch_json, control_packet, flags, libpaths, pmid_list, pdi_list);
     resize_scratchpad(preempt_save);
@@ -328,7 +352,7 @@ private:
   std::map<std::string, std::unique_ptr<aie2_isa_op_factory_base>> m_mnemonic_table;
 
 protected:
-  std::unique_ptr<aie2_isa_op> assemble_operation(std::shared_ptr<operation> op);
+  std::unique_ptr<aie2_isa_op> assemble_operation(const operation* op);
 
 public:
   aie2_asm_preprocessor_input();
@@ -337,7 +361,8 @@ public:
                 const std::vector<char>& control_packet,
                 const std::vector<std::string>& libs,
                 const std::vector<std::string>& libpaths,
-                const std::map<uint32_t, std::vector<char> >& ctrlpkt) override
+                const std::map<uint32_t, std::vector<char> >& ctrlpkt,
+                const file_artifact* /*resolver*/ = nullptr) override
   {
     const std::vector<char> mc_code = encode(mc_asm_code);
     aie2_blob_transaction_preprocessor_input::set_args(mc_code, patch_json, control_packet, libs, libpaths, ctrlpkt);
@@ -385,6 +410,9 @@ class aie2_config_preprocessor_input : public aie2_blob_transaction_preprocessor
 {
   static constexpr const char* pm_ctrlpkt_type = "pmctrlpkt";
   std::map<std::string, instance_input> kernel_map;
+  const file_artifact* m_artifacts = nullptr;
+  global_custom_section_storage m_global_custom_sections;
+
 protected:
   void readconfigjson(std::istream& patch_json, const std::vector<std::string>& paths);
   void add_pdi(const std::string& kernel, const boost::property_tree::ptree& pinstance, const std::vector<std::string>& paths);
@@ -399,17 +427,20 @@ protected:
   {
     return ".ctrlpkt.pm." + std::to_string(pdi_id);
   }
+
 public:
   void set_args(const std::vector<char>& /*mc_code*/,
                 const std::vector<char>& patch_json,
                 const std::vector<char>& /*control_packet*/,
                 const std::vector<std::string>& /*libs*/,
                 const std::vector<std::string>& libpaths,
-                const std::map<uint32_t, std::vector<char> >& /*ctrlpkt*/) override
-  {
+                const std::map<uint32_t, std::vector<char> >& /*ctrlpkt*/,
+                const file_artifact* artifacts = nullptr) override  
+{
     arg_offset = 0;
     if (patch_json.size() !=0)
     {
+      m_artifacts = artifacts;
       vector_streambuf vsb(patch_json);
       std::istream elf_stream(&vsb);
       readconfigjson(elf_stream, libpaths);
@@ -418,6 +449,11 @@ public:
 
   const std::map<std::string, instance_input>&
   get_kernel_map() const { return kernel_map; }
+
+  const std::map<std::string, std::vector<uint8_t>>& get_global_custom_sections() const
+  {
+    return m_global_custom_sections.map();
+  }
 };
 
 }

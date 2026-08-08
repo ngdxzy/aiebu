@@ -1,30 +1,27 @@
 // SPDX-License-Identifier: MIT
-// Copyright (C) 2024-2025, Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (C) 2024-2026, Advanced Micro Devices, Inc. All rights reserved.
 
 #ifndef _AIEBU_ELF_AIE2_BLOB_ELF_WRITER_H_
 #define _AIEBU_ELF_AIE2_BLOB_ELF_WRITER_H_
 
 #include <elfwriter.h>
+#include <aie_elf_constants.h>
 
 namespace aiebu {
 
 class aie2_blob_elf_writer: public elf_writer
 {
-  constexpr static unsigned char ob_abi = 0x45;
-  constexpr static unsigned char version = 0x02;
 public:
-  aie2_blob_elf_writer(): elf_writer(ob_abi, version)
+  aie2_blob_elf_writer(): elf_writer(osabi_aie2p, elf_version_legacy)
   { }
 };
 
 class aie2_config_elf_writer: public elf_writer
 {
-  constexpr static unsigned char ob_abi = 0x45;
-  constexpr static unsigned char version = 0x10;
   const std::string xrt_configuration = ".note.xrt.configuration";
 
 public:
-  aie2_config_elf_writer(): elf_writer(ob_abi, version)
+  aie2_config_elf_writer(): elf_writer(osabi_aie2p, elf_version_config)
   { }
 
   /**
@@ -43,6 +40,9 @@ public:
     auto mconfig_writer = std::dynamic_pointer_cast<aie2_config_writer>(mwriter[0]);
     init_symtab();
     uint32_t index=0;
+
+    process_global_custom_sections_if_any(mconfig_writer->get_global_custom_sections());
+
     for( auto& [kernel, instances] : mconfig_writer->get_kernel_map())
     {
        auto kernel_index = add_symtab(kernel);
@@ -51,10 +51,11 @@ public:
        {
          auto instance_index = add_symtab_section(iname, kernel_index);
          std::vector<uint32_t> group_data = process_common_helper(instance, get_section_prefix(index));
-         // first word is GRP_COMDAT
-         group_data.insert(group_data.begin(), 1);
+         std::vector<uint32_t> grouped;
+         grouped.push_back(1);
+         grouped.insert(grouped.end(), group_data.begin(), group_data.end());
          //group_data.insert(group_data.end(), common_data.begin(), common_data.end());
-         add_group(get_group_name(index), group_data, instance_index);
+         add_group(get_group_name(index), grouped, instance_index);
          index++;
        }
     }

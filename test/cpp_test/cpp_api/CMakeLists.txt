@@ -13,6 +13,38 @@ add_executable(${AIE2PS_TESTNAME} aie2ps_test.cpp)
 target_link_libraries(${AIE2PS_TESTNAME} PRIVATE aiebu_static)
 target_include_directories(${AIE2PS_TESTNAME} PRIVATE ${AIEBU_SOURCE_DIR}/src/cpp/include)
 
+set(AIE2_FULLELF_TESTNAME "aie2_full_elf_cpp")
+add_executable(${AIE2_FULLELF_TESTNAME} aie2_full_elf_test.cpp)
+target_link_libraries(${AIE2_FULLELF_TESTNAME} PRIVATE aiebu_static)
+target_include_directories(${AIE2_FULLELF_TESTNAME} PRIVATE ${AIEBU_SOURCE_DIR}/src/cpp/include)
+
+set(AIE4_SAVETIMESTAMPS_TESTNAME "aie4_savetimestamps_cpp")
+add_executable(${AIE4_SAVETIMESTAMPS_TESTNAME} aie4_savetimestamps_test.cpp)
+target_link_libraries(${AIE4_SAVETIMESTAMPS_TESTNAME} PRIVATE aiebu_static)
+target_include_directories(${AIE4_SAVETIMESTAMPS_TESTNAME} PRIVATE
+  ${AIEBU_SOURCE_DIR}/src/cpp/include
+  ${AIEBU_ELFIO_SRC_DIR})
+if (NOT WIN32)
+  target_link_libraries(${AIE4_SAVETIMESTAMPS_TESTNAME} PRIVATE pthread)
+endif()
+
+set(AIEBU_ERROR_TESTNAME "aiebu_error_cpp")
+add_executable(${AIEBU_ERROR_TESTNAME} aiebu_error_test.cpp)
+target_link_libraries(${AIEBU_ERROR_TESTNAME} PRIVATE aiebu_static)
+target_include_directories(${AIEBU_ERROR_TESTNAME} PRIVATE ${AIEBU_SOURCE_DIR}/src/cpp/include)
+if (NOT WIN32)
+  target_link_libraries(${AIEBU_ERROR_TESTNAME} PRIVATE pthread)
+endif()
+
+set(AIE_COREDUMP_TESTNAME "aie_coredump_cpp")
+add_executable(${AIE_COREDUMP_TESTNAME} aie_coredump_test.cpp)
+target_link_libraries(${AIE_COREDUMP_TESTNAME} PRIVATE aiebu_static)
+target_include_directories(${AIE_COREDUMP_TESTNAME} PRIVATE ${AIEBU_SOURCE_DIR}/src/cpp/include)
+if (NOT WIN32)
+  target_link_libraries(${AIE_COREDUMP_TESTNAME} PRIVATE pthread)
+endif()
+
+
 if (NOT WIN32)
   target_link_libraries(${AIE2_TESTNAME} PRIVATE pthread)
   target_link_libraries(${AIE2PS_TESTNAME} PRIVATE pthread)
@@ -33,6 +65,14 @@ add_test(NAME "aie2ps_cpp_eff_net_coal"
   COMMAND ${AIE2PS_TESTNAME} "eff_net_coal" "${AIEBU_SOURCE_DIR}/test/cpp_test/aie2ps/eff_net_coal/"
   WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
 
+#add_test(NAME "aie4_move_ddr_to_memtile_ctrlpkt"
+#  COMMAND ${AIE2PS_TESTNAME} "move_ddr_to_memtile_ctrlpkt" "${AIEBU_SOURCE_DIR}/test/cpp_test/aie4/move_ddr_to_memtile_ctrlpkt/"
+#  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+
+add_test(NAME "aie4_move_ddr_to_memtile"
+  COMMAND ${AIE2PS_TESTNAME} "move_ddr_to_memtile" "${AIEBU_SOURCE_DIR}/test/cpp_test/aie4/move_ddr_to_memtile/"
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+
 # add_test(NAME "aie2ps_cpp_eff_net_ctrlpacket"
 #   COMMAND ${AIE2PS_TESTNAME} "eff_net_ctrlpacket" "${AIEBU_SOURCE_DIR}/test/cpp_test/aie2ps/eff_net_ctrlpacket/"
 #   WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
@@ -45,6 +85,11 @@ if(Boost_VERSION VERSION_GREATER 1.70)
     COMMAND cmake -P "${AIEBU_SOURCE_DIR}/cmake/md5sum-compare.cmake" "${CMAKE_CURRENT_BINARY_DIR}/eff_net_coal.elf" "${AIEBU_SOURCE_DIR}/test/cpp_test/aie2ps/eff_net_coal/gold.md5"
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
   set_tests_properties("aie2ps_cpp_eff_net_coal_md5sum" PROPERTIES DEPENDS "aie2ps_cpp_eff_net_coal")
+
+  add_test(NAME "aie2ps_cpp_eff_net_coal_modified_md5sum"
+    COMMAND cmake -P "${AIEBU_SOURCE_DIR}/cmake/md5sum-compare.cmake" "${CMAKE_CURRENT_BINARY_DIR}/eff_net_coal_modified.elf" "${AIEBU_SOURCE_DIR}/test/cpp_test/aie2ps/eff_net_coal/gold_modified.md5"
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+  set_tests_properties("aie2ps_cpp_eff_net_coal_modified_md5sum" PROPERTIES DEPENDS "aie2ps_cpp_eff_net_coal")
 
 # add_test(NAME "aie2ps_cpp_eff_net_ctrlpacket_md5sum"
 #   COMMAND cmake -P "${AIEBU_SOURCE_DIR}/cmake/md5sum-compare.cmake" "${CMAKE_CURRENT_BINARY_DIR}/eff_net_ctrlpacket.elf" "${AIEBU_SOURCE_DIR}/test/cpp_test/aie2ps/eff_net_ctrlpacket/gold.md5"
@@ -59,5 +104,32 @@ add_test(NAME "aie2_cpp_4x8"
   COMMAND ${AIE2_TESTNAME} "${AIEBU_BINARY_DIR}/${CMAKE_INSTALL_LIBDIR}/gen/preempt_restore_stx_4x8.bin"
   WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
 
+#add_test(NAME "aie2_tinyyolo_preempt"
+#  COMMAND ${AIE2_FULLELF_TESTNAME} "tinyyolo_preempt" "${AIEBU_SOURCE_DIR}/test/cpp_test/aie2/tinyyolo_preempt/"
+#  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+
+#add_test(NAME "aie2_tinyyolo_preempt_cp"
+#  COMMAND ${AIE2_FULLELF_TESTNAME} "tinyyolo_preempt_cp" "${AIEBU_SOURCE_DIR}/test/cpp_test/aie2/tinyyolo_preempt_cp/"
+#  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+
 set_tests_properties("aie2_cpp_4x4" PROPERTIES LABELS memcheck)
 set_tests_properties("aie2_cpp_4x8" PROPERTIES LABELS memcheck)
+
+add_test(NAME "aie4_1col_preempt_savetimestamps_config"
+  COMMAND ${AIE4_SAVETIMESTAMPS_TESTNAME} "config" "${AIEBU_SOURCE_DIR}/test/aie4-ctrlcode/1col_preempt"
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+
+add_test(NAME "aie4_1col_preempt_savetimestamps_target"
+  COMMAND ${AIE4_SAVETIMESTAMPS_TESTNAME} "target" "${AIEBU_SOURCE_DIR}/test/aie4-ctrlcode/1col_preempt"
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+
+# Duplicate ASM file name error tests (both cases run in the same binary;
+# exit code 0 means every test case reported PASS).
+add_test(NAME "aiebu_error_duplicate_asm_filename"
+  COMMAND ${AIEBU_ERROR_TESTNAME}
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+
+# AIE Coredump ELF generation tests.
+add_test(NAME "aie_coredump_elf_generation"
+  COMMAND ${AIE_COREDUMP_TESTNAME}
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})

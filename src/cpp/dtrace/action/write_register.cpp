@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Copyright (C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
 
 #include "dtrace/action/action_control.h"
 #include <sstream>
@@ -26,10 +26,10 @@ write_reg_action(std::string token, uint32_t probe_type, const std::string& prob
     std::stringstream token_stream(token);
     std::string item;
     while (std::getline(token_stream, item, '='))
-        fields.push_back(strip(item));
+        fields.push_back(action::strip(item));
 
-    boost::smatch action;
-    if (!boost::regex_match(fields[0], action, action_name::action_regex))
+    aiebu::smatch action;
+    if (!aiebu::regex_match(fields[0], action, action_name::action_regex))
         DTRACE_ERROR("DTRACE_ACTION_INVALID_TOKEN", 
             "Invalid token: '" << token << "' Expected 'write_reg(addr, val)'");
 
@@ -39,7 +39,7 @@ write_reg_action(std::string token, uint32_t probe_type, const std::string& prob
     // Validate and parse the length argument
     std::stringstream argument_stream(argument_string);
     while (std::getline(argument_stream, item, ','))
-        m_arguments.push_back(strip(item));
+        m_arguments.push_back(action::strip(item));
 
     if (m_arguments.size() < 2)
         DTRACE_ERROR("DTRACE_ACTION_INVALID_TOKEN_ARGUMENTS", 
@@ -65,30 +65,41 @@ actionize(uint32_t last, std::vector<uint32_t>& control_buffer, std::vector<uint
         (last << dtrace::dtrace_ctrl::second_byte_shift) | action_type::reg_write
     );
     // write address
-    control_buffer.push_back(std::stoul(m_arguments[0], nullptr, 16));
+    control_buffer.push_back(std::stoul(m_arguments[0], nullptr, dtrace::dtrace_ctrl::hexadecimal_base));
     // write value
-    control_buffer.push_back(std::stoul(m_arguments[1], nullptr, 16));
+    control_buffer.push_back(std::stoul(m_arguments[1], nullptr, dtrace::dtrace_ctrl::decimal_hexadecimal_base));
 }
 
 //-------------------------write_reg_action::serialize-------------------------//
 /**
- * serialize() - Serializes the register write action into a string format.
+ * serialize() - Serializes the write register action into a string format.
  *
  * @param result_buffer
  * @param mem_buffer
  * @param mapping
- *
- * @return 
- *  String representing the serialized register write action.
+ * @param script_output
  */
-std::string
+void
 write_reg_action::
-serialize(const std::vector<uint32_t>&, const std::vector<uint32_t>&, 
-    const std::unordered_map<uint32_t, uint32_t>&) const
+serialize(uint32_t*, uint32_t*,
+    const std::unordered_map<uint32_t, uint32_t>&, std::ostream&) const
 {
-    std::ostringstream output_action;
-    output_action << "  " << "#" << " " << m_action_name << "\n";
-    return output_action.str();
+}
+
+//-------------------------write_reg_action::serialize-------------------------//
+/**
+ * serialize() - Serializes the write register action into json format.
+ *
+ * @param result_buffer
+ * @param mem_buffer
+ * @param mapping
+ * @param json_output
+ */
+void
+write_reg_action::
+serialize(uint32_t*, uint32_t*,
+    const std::unordered_map<uint32_t, uint32_t>&, json&) const
+{
 }
 
 } // namespace dtrace::action

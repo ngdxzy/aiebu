@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: MIT
-// Copyright (C) 2024-2025, Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (C) 2024-2026, Advanced Micro Devices, Inc. All rights reserved.
 
 #ifndef _AIEBU_COMMON_WRITER_H_
 #define _AIEBU_COMMON_WRITER_H_
 
+#include <cstdint>
 #include <map>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -47,6 +49,21 @@ public:
 
   virtual void write_word(uint32_t word);
 
+  // Bulk write methods for better performance
+  template <typename T> void
+  write_bytes(const T &bytes)
+  {
+    m_data.insert(m_data.end(), bytes.begin(), bytes.end());
+  }
+
+  void
+  write_default_bytes(unsigned int count)
+  {
+    m_data.resize(m_data.size() + count, 0x0);
+  }
+
+  virtual void reserve(size_t capacity);
+
   virtual uint32_t read_word(offset_type offset) const;
 
   virtual void write_word_at(offset_type offset, uint32_t word);
@@ -57,6 +74,13 @@ public:
   get_data() const
   {
     return m_data;
+  }
+
+  // Moves section bytes out for one-shot ELF emission; m_data becomes empty.
+  std::vector<uint8_t>
+  take_data_for_emit()
+  {
+    return std::move(m_data);
   }
 
   const std::string&
@@ -127,7 +151,33 @@ public:
   }
 };
 
-class aie2_config_writer: public writer
+class config_writer_base : public writer
+{
+protected:
+  std::vector<std::shared_ptr<writer>> m_global_custom_sections;
+
+public:
+  void add_global_custom_section(std::shared_ptr<writer> val)
+  {
+    m_global_custom_sections.emplace_back(std::move(val));
+  }
+
+  const std::vector<std::shared_ptr<writer>>& get_global_custom_sections() const
+  {
+    return m_global_custom_sections;
+  }
+
+  void add_section_writers_from_custom_section_map(
+      const std::map<std::string, std::vector<uint8_t>>& global_sections)
+  {
+    for (const auto& [section_name, section_data] : global_sections) {
+      add_global_custom_section(
+          std::make_shared<section_writer>(section_name, code_section::custom, std::vector<uint8_t>(section_data)));
+    }
+  }
+};
+
+class aie2_config_writer: public config_writer_base
 {
   // map<kernel, instance_writer>
   std::map<std::string, instance_writer> m_output;
@@ -150,13 +200,18 @@ public:
   std::shared_ptr<const partition_info> get_partition_info() const { return m_partition; }
 };
 
-class config_writer: public writer
+class config_writer: public config_writer_base
 {
   std::map<std::string, std::map<std::string, std::vector<std::shared_ptr<writer>>>> m_output;
   std::shared_ptr<const partition_info> m_partition;
+  std::shared_ptr<const target_info> m_target;
+  std::shared_ptr<const aie_row_topology_info> m_aie_row_topology;
 
 public:
-  explicit config_writer(std::shared_ptr<const partition_info> partition): m_partition(std::move(partition)) {}
+  explicit config_writer(std::shared_ptr<const partition_info> partition,
+                         std::shared_ptr<const target_info> target = nullptr,
+                         std::shared_ptr<const aie_row_topology_info> aie_row_topology = nullptr)
+    : m_partition(std::move(partition)), m_target(std::move(target)), m_aie_row_topology(std::move(aie_row_topology)) {}
 
   const std::map<std::string, std::map<std::string,  std::vector<std::shared_ptr<writer>>>>&
   get_kernel_map() const { return m_output; }
@@ -166,6 +221,8 @@ public:
   }
 
   std::shared_ptr<const partition_info> get_partition_info() const { return m_partition; }
+  std::shared_ptr<const target_info> get_target_info() const { return m_target; }
+  std::shared_ptr<const aie_row_topology_info> get_aie_row_topology_info() const { return m_aie_row_topology; }
 };
 
 class asm_writer
@@ -188,6 +245,7 @@ public:
   void write_directive(const std::string& directive);
   void write_label(const std::string& label);
   void write_attach_to_group(int colnum);
+  void write_partition(const std::string& partition_str);
   void write_operation(const std::string& name, const std::vector<std::string>& args, const std::string& label);
   void write_endl(const std::string& label);
   void write_eop();

@@ -1,13 +1,12 @@
 @ECHO OFF
 
 REM SPDX-License-Identifier: MIT
-REM Copyright (C) 2024 Advanced Micro Devices, Inc. All rights reserved.
+REM Copyright (C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
 setlocal enabledelayedexpansion
 set SCRIPTDIR=%~dp0
 set SCRIPTDIR=%SCRIPTDIR:~0,-1%
 set BUILDDIR=%SCRIPTDIR%
 
-set CMAKEFLAGS=-DMSVC_PARALLEL_JOBS=%LOCAL_MSVC_PARALLEL_JOBS% -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 set DEBUG=1
 set RELEASE=1
 set CREATE_PACKAGE=0
@@ -15,7 +14,7 @@ set CMAKEFLAGS=
 set NOCMAKE=0
 set NOCTEST=0
 set AIEBU_BUILD=""
-set BOOST="C:\\Program\ Files\\boost\\boost_1_88_0\\boost"
+set BOOST=C:\Xilinx\XRT\ext.new
 set GENERATOR="Visual Studio 17 2022"
 set PLATFORM=WBuild
 
@@ -57,9 +56,12 @@ IF DEFINED MSVC_PARALLEL_JOBS ( SET LOCAL_MSVC_PARALLEL_JOBS=%MSVC_PARALLEL_JOBS
   if [%1] == [-nocmake] (
     set NOCMAKE=1
   ) else (
+  if [%1] == [-noctest] (
+    set NOCTEST=1
+  ) else (
     echo Unknown option: %1
     goto Help
-  )))))))))))
+  ))))))))))))
   shift
   goto parseArgs
 
@@ -88,9 +90,12 @@ if [%DEBUG%] == [1] (
    cmake --install %BUILDDIR%\%PLATFORM% --config Debug --prefix %BUILDDIR%\%PLATFORM%\Debug\xilinx\aiebu --verbose
    if errorlevel 1 (exit /B %errorlevel%)
 
-  @REM  echo cmake --build %BUILDDIR%\%PLATFORM% --config Debug --target run_tests -j %LOCAL_MSVC_PARALLEL_JOBS%
-  @REM  cmake --build %BUILDDIR%\%PLATFORM% --config Debug --target run_tests -j %LOCAL_MSVC_PARALLEL_JOBS%
-   if errorlevel 1 (exit /B %errorlevel%)
+   if [%NOCTEST%] == [0] (
+      echo ctest --test-dir %BUILDDIR%\%PLATFORM% -C Debug -j %NUMBER_OF_PROCESSORS%
+      ctest --test-dir %BUILDDIR%\%PLATFORM% -C Debug -j %NUMBER_OF_PROCESSORS% --output-on-failure
+      set CTEST_ERRORLEVEL=!ERRORLEVEL!
+      if !CTEST_ERRORLEVEL! neq 0 (exit /B !CTEST_ERRORLEVEL!)
+   )
 )
 
 if [%RELEASE%] == [1] (
@@ -102,9 +107,12 @@ if [%RELEASE%] == [1] (
    cmake --install %BUILDDIR%\%PLATFORM% --config Release --prefix %BUILDDIR%\%PLATFORM%\Release\xilinx\aiebu --verbose
    if errorlevel 1 (exit /B %errorlevel%)
 
-  @REM  echo cmake --build %BUILDDIR%\%PLATFORM% --config Release --target run_tests
-  @REM  cmake --build %BUILDDIR%\%PLATFORM% --config Release --target run_tests
-  @REM  if errorlevel 1 (exit /B %errorlevel%)
+   if [%NOCTEST%] == [0] (
+      echo ctest --test-dir %BUILDDIR%\%PLATFORM% -C Release -j %NUMBER_OF_PROCESSORS%
+      ctest --test-dir %BUILDDIR%\%PLATFORM% -C Release -j %NUMBER_OF_PROCESSORS% --output-on-failure
+      set CTEST_ERRORLEVEL=!ERRORLEVEL!
+      if !CTEST_ERRORLEVEL! neq 0 (exit /B !CTEST_ERRORLEVEL!)
+   )
 
    ECHO ====================== Create SDK ZIP archive ============================
    echo cpack -G ZIP -B %BUILDDIR%\%PLATFORM% -C Release --config %BUILDDIR%\%PLATFORM%\CPackConfig.cmake
@@ -133,6 +141,7 @@ ECHO [-opt]                     - Creates a release build
 ECHO [-package]                 - Packages the release build to a MSI archive.
 ECHO [-r]                       - build only aie2
 ECHO [-p]                       - build python assembler also
+ECHO [-noctest]                 - run no test during build
 ECHO                              Note: Depends on the WIX application.
 GOTO:EOF
 

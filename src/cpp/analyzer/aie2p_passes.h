@@ -7,7 +7,8 @@
 #include <list>
 
 #include "basicpass.h"
-#include "xaiengine.h"
+#include <xaiengine/xaiegbl.h>
+#include <xaiengine/xaie_txn.h>
 
 namespace aiebu {
 
@@ -23,10 +24,8 @@ template <typename opnode> opnode *allocXaie() {
 }
 
 class XAie_OpHdr_null : public aie2p_basicpass<XAie_OpHdr> {
-  std::list<basic_node<XAie_OpHdr>> &m_nodes;
 public:
-  explicit XAie_OpHdr_null(std::list<basic_node<XAie_OpHdr>> &nodes)
-    : m_nodes(nodes)  {}
+  explicit XAie_OpHdr_null(std::list<basic_node<XAie_OpHdr>> &) {}
 
   void transform() override;
 };

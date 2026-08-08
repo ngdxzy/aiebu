@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: MIT
+# Copyright (C) 2025-2026 Advanced Micro Devices, Inc.
+
+if (${Boost_VERSION} VERSION_GREATER_EQUAL "1.71.0")
+  add_subdirectory(basic)
+  add_subdirectory(move_ddr_to_memtile_ctrlpkt)
+  add_subdirectory(1col_preempt)
+  add_subdirectory(1col_preempt_0hint)
+  add_subdirectory(3col_preempt_0hint)
+  add_subdirectory(multi_layer)
+  add_subdirectory(compile_time/fused_hw_package_subgraph_0)
+  add_subdirectory(multi_graph)
+  add_subdirectory(opcode_checks)
+  add_subdirectory(duplicate_include)
+  add_subdirectory(decode_opcode)
+endif()

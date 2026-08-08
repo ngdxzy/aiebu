@@ -9,8 +9,8 @@
 #include "asm/asm_parser.h"
 #include "utils.h"
 
-#include "xaiengine.h"
-#include "xaiengine/xaiegbl.h"
+#include <xaiengine/xaiegbl.h>
+#include <xaiengine/xaie_txn.h>
 
 namespace aiebu {
 
@@ -84,7 +84,7 @@ protected:
     char *storage = new char[m_size];
     std::memset(storage, 0, m_size);
     m_op = reinterpret_cast<XAie_OpHdr *>(storage);
-    m_op->Op = m_code;
+    m_op->Op = static_cast<uint8_t>(m_code);
   }
 
   void operand_count_check(const std::vector<std::string>& args, unsigned int size) const {
@@ -136,7 +136,7 @@ public:
     return 0;
   }
 
-  virtual void process_outstanding_ext_op(const std::shared_ptr<operation> op) {
+  virtual void process_outstanding_ext_op(const operation* op) {
     const std::vector<std::string>& args = op->get_args();
     throw error(error::error_code::internal_error, opcode_table.at(m_code) +
                     " does not require extended operands" + args[0]);
@@ -153,7 +153,7 @@ public:
     initialize_OpHdr(sizeof(XAie_Write32Hdr));
 
     auto op = reinterpret_cast<XAie_Write32Hdr *>(m_op);
-    op->RegOff = to_uinteger<uint64_t>(regoff);
+    op->RegOff = to_uinteger<uint32_t>(regoff);
     op->Value = to_uinteger<uint32_t>(args[1]);
     op->Size = sizeof(XAie_Write32Hdr);
   }
@@ -170,7 +170,7 @@ private:
 
   [[nodiscard]] unsigned int get_extended_operand_index() const {
     size_t ex_op_size = get_op_size() - get_op_base_size();
-    return ex_op_size / sizeof(uint32_t) - outstanding_extended_operand_count;
+    return static_cast<unsigned int>(ex_op_size / sizeof(uint32_t)) - outstanding_extended_operand_count;
   }
 
 public:
@@ -191,10 +191,10 @@ public:
     std::string regoff = args[idx++].substr(1);
     // Determine the total size including extended storage by counting the number of writes
 
-    static const boost::regex index_regex = get_regex({fragment::index_re});
+    static const aiebu::regex index_regex = get_regex({fragment::index_re});
 
-    boost::smatch matches;
-    if (!boost::regex_match(args[idx], matches, index_regex))
+    aiebu::smatch matches;
+    if (!aiebu::regex_match(args[idx], matches, index_regex))
         throw error(error::error_code::invalid_asm, args[idx]);
 
     if (matches.size() != 2)
@@ -205,8 +205,8 @@ public:
                      sizeof(uint32_t) * outstanding_extended_operand_count);
 
     auto op = reinterpret_cast<XAie_BlockWrite32Hdr *>(m_op);
-    op->RegOff = to_uinteger<uint64_t>(regoff);
-    op->Size = get_op_size();
+    op->RegOff = to_uinteger<uint32_t>(regoff);
+    op->Size = static_cast<uint32_t>(get_op_size());
   }
 
   [[nodiscard]] size_t get_op_base_size() const override {
@@ -218,10 +218,10 @@ public:
   }
 
   [[nodiscard]] unsigned int total_extended_operand_count() const {
-    return (get_op_size() - get_op_base_size()) / sizeof(uint32_t);
+    return static_cast<unsigned int>((get_op_size() - get_op_base_size()) / sizeof(uint32_t));
   }
 
-  void process_outstanding_ext_op(const std::shared_ptr<operation> op) override {
+  void process_outstanding_ext_op(const operation* op) override {
     if (outstanding_extended_operand_count == 0)
       throw error(error::error_code::invalid_asm, "This instance of " + get_mnemonic() +
                       " cannot have more than " + std::to_string(total_extended_operand_count()) + " operands");
@@ -249,12 +249,12 @@ public:
     std::string regoff = args[0].substr(1);
 
     auto op = reinterpret_cast<XAie_MaskWrite32Hdr *>(m_op);
-    op->RegOff = to_uinteger<uint64_t>(regoff);
-    static const boost::regex mask_regex = get_regex({fragment::begin_anchor_re, fragment::hex_re, fragment::l_brack_re,
+    op->RegOff = to_uinteger<uint32_t>(regoff);
+    static const aiebu::regex mask_regex = get_regex({fragment::begin_anchor_re, fragment::hex_re, fragment::l_brack_re,
         fragment::r_brack_re, fragment::end_anchor_re});
 
-    boost::smatch matches;
-    if (!boost::regex_match(args[1], matches, mask_regex))
+    aiebu::smatch matches;
+    if (!aiebu::regex_match(args[1], matches, mask_regex))
         throw error(error::error_code::invalid_asm, args[1]);
 
     if (matches.size() != 2)
@@ -262,7 +262,7 @@ public:
 
     op->Mask = to_uinteger<uint32_t>(matches[1]);
     op->Value = to_uinteger<uint32_t>(args[2]);
-    op->Size = get_op_size();
+    op->Size = static_cast<uint32_t>(get_op_size());
   }
 
   [[nodiscard]] size_t get_op_base_size() const override {
@@ -281,13 +281,13 @@ public:
     const std::string regoff = args[idx++].substr(1);
 
     auto op = reinterpret_cast<XAie_MaskPoll32Hdr *>(m_op);
-    op->RegOff = to_uinteger<uint64_t>(regoff);
+    op->RegOff = to_uinteger<uint32_t>(regoff);
 
-    static const boost::regex mask_poll_regex = get_regex({fragment::begin_anchor_re, fragment::hex_re, fragment::l_brack_re,
+    static const aiebu::regex mask_poll_regex = get_regex({fragment::begin_anchor_re, fragment::hex_re, fragment::l_brack_re,
         fragment::r_brack_re, fragment::equal_re, fragment::hex_re, fragment::end_anchor_re});
 
-    boost::smatch matches;
-    if (!boost::regex_match(args[idx], matches, mask_poll_regex))
+    aiebu::smatch matches;
+    if (!aiebu::regex_match(args[idx], matches, mask_poll_regex))
         throw error(error::error_code::invalid_asm, args[idx]);
 
     if (matches.size() != 3)
@@ -296,7 +296,7 @@ public:
 
     op->Mask = to_uinteger<uint32_t>(matches[1]);
     op->Value = to_uinteger<uint32_t>(matches[2]);
-    op->Size = get_op_size();
+    op->Size = static_cast<uint32_t>(get_op_size());
   }
 
   [[nodiscard]] size_t get_op_base_size() const override {
@@ -336,7 +336,7 @@ public:
     initialize_OpHdr(sizeof(XAie_PreemptHdr));
 
     auto op = reinterpret_cast<XAie_PreemptHdr *>(m_op);
-    op->Preempt_level = preempt_level_table.at(args[0]);
+    op->Preempt_level = static_cast<uint8_t>(preempt_level_table.at(args[0]));
   }
 
   [[nodiscard]] size_t get_op_base_size() const override {
@@ -388,9 +388,9 @@ public:
 
 class XAIE_IO_CUSTOM_OP_TCT_op : public aie2_isa_op {
 private:
-  std::pair<uint8_t, uint8_t> parse_index(const boost::regex &regx, const std::string &token) const {
-    boost::smatch cmatches;
-    if (!boost::regex_match(token, cmatches, regx))
+  std::pair<uint8_t, uint8_t> parse_index(const aiebu::regex &regx, const std::string &token) const {
+    aiebu::smatch cmatches;
+    if (!aiebu::regex_match(token, cmatches, regx))
         throw error(error::error_code::invalid_asm, token);
 
     if (cmatches.size() !=3)
@@ -405,18 +405,18 @@ public:
     initialize_OpHdr(sizeof(XAie_CustomOpHdr) + sizeof(tct_op_t));
 
     auto op = reinterpret_cast<XAie_CustomOpHdr *>(m_op);
-    op->Size = get_op_size();
+    op->Size = static_cast<uint32_t>(get_op_size());
 
     auto values = get_extended_storage<tct_op_t>();
     unsigned int idx = 0;
-    static const boost::regex row_regex = get_regex({fragment::row, fragment::add_dec_re});
-    static const boost::regex col_regex = get_regex({fragment::column, fragment::add_dec_re});
+    static const aiebu::regex row_regex = get_regex({fragment::row, fragment::add_dec_re});
+    static const aiebu::regex col_regex = get_regex({fragment::column, fragment::add_dec_re});
 
     std::pair<uint8_t, uint8_t> row_val = parse_index(row_regex, args[idx++]);
     std::pair<uint8_t, uint8_t> col_val = parse_index(col_regex, args[idx++]);
 
     uint8_t dir =  dma_direction_table.at(args[idx++]);
-    uint8_t channel = to_uinteger<uint32_t>(args[idx]);
+    uint8_t channel = static_cast<uint8_t>(to_uinteger<uint32_t>(args[idx]));
 
     values->word = col_val.first;
     values->word <<= 8;
@@ -445,13 +445,13 @@ public:
     initialize_OpHdr(sizeof(XAie_CustomOpHdr) + sizeof(tct_op_t));
 
     auto op = reinterpret_cast<XAie_CustomOpHdr *>(m_op);
-    op->Size = get_op_size();
+    op->Size = static_cast<uint32_t>(get_op_size());
 
     auto values = get_extended_storage<tct_op_t>();
 
-    static const boost::regex regx = get_regex({fragment::column, fragment::equal_re, fragment::dec_re});
-    boost::smatch cmatches;
-    if (!boost::regex_match(args[0], cmatches, regx))
+    static const aiebu::regex regx = get_regex({fragment::column, fragment::equal_re, fragment::dec_re});
+    aiebu::smatch cmatches;
+    if (!aiebu::regex_match(args[0], cmatches, regx))
         throw error(error::error_code::invalid_asm, args[0]);
 
     if (cmatches.size() !=3)
@@ -478,7 +478,7 @@ public:
     initialize_OpHdr(sizeof(XAie_CustomOpHdr) + sizeof(patch_op_t));
 
     auto op = reinterpret_cast<XAie_CustomOpHdr *>(m_op);
-    op->Size = get_op_size();
+    op->Size = static_cast<uint32_t>(get_op_size());
     auto values = get_extended_storage<patch_op_t>();
 
     const std::string regoff = args[0].substr(1);
@@ -501,10 +501,10 @@ public:
     initialize_OpHdr(sizeof(XAie_CustomOpHdr) + sizeof(unsigned int));
 
     auto op = reinterpret_cast<XAie_CustomOpHdr *>(m_op);
-    op->Size = get_op_size();
+    op->Size = static_cast<uint32_t>(get_op_size());
     auto values = get_extended_storage<unsigned int>();
 
-    values[0] = to_uinteger<uint64_t>(args[0].substr(1));
+    values[0] = static_cast<unsigned int>(to_uinteger<uint64_t>(args[0].substr(1)));
   }
 
   [[nodiscard]] size_t get_op_base_size() const override {
@@ -562,7 +562,7 @@ aie2_asm_preprocessor_input::aie2_asm_preprocessor_input() {
   m_mnemonic_table.emplace("xaie_io_custom_op_record_timer", std::make_unique<aie2_isa_op_factory<XAIE_IO_CUSTOM_OP_RECORD_TIMER_op>>());
 }
 
-std::unique_ptr<aie2_isa_op> aie2_asm_preprocessor_input::assemble_operation(std::shared_ptr<operation> op)
+std::unique_ptr<aie2_isa_op> aie2_asm_preprocessor_input::assemble_operation(const operation* op)
 {
   auto iter  = m_mnemonic_table.find(op->get_name());
 
@@ -575,7 +575,7 @@ std::unique_ptr<aie2_isa_op> aie2_asm_preprocessor_input::assemble_operation(std
 
 std::vector<char>
 aie2_asm_preprocessor_input::encode(const std::vector<char>& mc_asm_code) {
-  std::shared_ptr<asm_parser> a(new asm_parser(mc_asm_code, {}));
+  std::shared_ptr<asm_parser> a(new asm_parser(mc_asm_code, {}, "aie2"));
   a->parse_lines();
   std::stringstream store;
 
@@ -586,18 +586,18 @@ aie2_asm_preprocessor_input::encode(const std::vector<char>& mc_asm_code) {
   std::vector<std::unique_ptr<aie2_isa_op>> isa_op_list;
 
   /* The ASM lines hang off the last column referred by.attach_to_group directive */
-  auto coldata = a->get_col_asmdata(collist.size() - 1);
-  auto labels = a->getLabelsforcol(collist.size() - 1);
+  auto coldata = a->get_col_asmdata(static_cast<uint32_t>(collist.size() - 1));
+  auto labels = a->getLabelsforcol(static_cast<uint32_t>(collist.size() - 1));
   if (labels.size() != 1)
     throw error(error::error_code::invalid_asm, "aie2 ctrlcode should have only one label");
   for (auto line : coldata.get_label_asmdata(labels.front())) {
     // If the previous recorded operation is expecting extension operations continue
     // populating the previous operation.
     if (isa_op_list.size() && isa_op_list.back()->outstanding_ext_op_count()) {
-      isa_op_list.back()->process_outstanding_ext_op(line->get_operation());
+      isa_op_list.back()->process_outstanding_ext_op(&line->get_operation());
       continue;
     }
-    std::unique_ptr<aie2_isa_op> isa_op = assemble_operation(line->get_operation());
+    std::unique_ptr<aie2_isa_op> isa_op = assemble_operation(&line->get_operation());
     isa_op_list.push_back(std::move(isa_op));
   }
 
@@ -609,8 +609,8 @@ aie2_asm_preprocessor_input::encode(const std::vector<char>& mc_asm_code) {
   std::streamoff size = store.tellp();
   store.seekp(0);
 
-  hdr.TxnSize = size;
-  hdr.NumOps = isa_op_list.size();
+  hdr.TxnSize = static_cast<uint32_t>(size);
+  hdr.NumOps = static_cast<uint32_t>(isa_op_list.size());
   store.write(reinterpret_cast<const char *>(&hdr), sizeof(hdr));
 
   std::vector<char> result(size);

@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
-// Copyright (C) 2024-2025, Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (C) 2024-2026, Advanced Micro Devices, Inc. All rights reserved.
 
 #include "ops.h"
 #include "aiebu/aiebu_error.h"
+#include "logger.h"
 
 #include <string>
 #include <iomanip>
@@ -27,6 +28,28 @@ align_op_serializer::size(assembler_state& state)
 {
   uint32_t align = std::stoi(m_args[0]);
   return ((state.get_pos() % align) > 0 ) ? (align - (state.get_pos() % align)) : 0;
+}
+
+offset_type
+isa_op::encoded_size_in_text(assembler_state& state,
+                             const std::vector<std::string>& args) const
+{
+  if (!m_opname.compare(".long"))
+    return 4;
+  if (!m_opname.compare(".align")) {
+    const uint32_t align = std::stoi(args.at(0));
+    const offset_type pos = state.get_pos();
+    return ((pos % align) > 0) ? static_cast<offset_type>(align - (pos % align)) : 0;
+  }
+  if (!m_opname.compare("uc_dma_bd"))
+    return 16;
+  if (state.is_optimization_enabled_for_op(m_opname))
+    return 0;
+  offset_type result = 2;
+  constexpr uint8_t width_8 = 8;
+  for (const auto& arg : m_args)
+    result += arg.m_width / width_8;
+  return result;
 }
 
 
@@ -81,10 +104,12 @@ serialize(std::shared_ptr<assembler_state> state, std::vector<symbol>& symbols,
     {
       try {
         val = state->parse_num_arg(sval);
-      } catch (symbol_exception &s) {
-        symbols.emplace_back(sval, state->get_pos()+(uint32_t)ret.size(),
-                             colnum, pagenum, 0, 0, ".ctrltext." + std::to_string(colnum)
-                             + "." + std::to_string(pagenum),
+      } catch (symbol_exception &) {
+        const std::string scaler_sec =
+            state->merged_ctrltext_elf()
+                ? (".ctrltext." + std::to_string(colnum))
+                : (".ctrltext." + std::to_string(colnum) + "." + std::to_string(pagenum));
+        symbols.emplace_back(sval, state->get_pos() + (uint32_t)ret.size(), colnum, pagenum, 0, 0, scaler_sec,
                              symbol::patch_schema::scaler_32);
       }
 
@@ -104,17 +129,22 @@ serialize(std::shared_ptr<assembler_state> state, std::vector<symbol>& symbols,
         {
           if (state->m_ctrlpkt_id_map.find(val) != state->m_ctrlpkt_id_map.end())
             sval = state->m_ctrlpkt_id_map[val];
+          else if (val == offset_type_marker && state->get_is_save_restore_op())
+            sval = "scratch-pad-mem";  // For save/restore routine, use "scratch-pad-mem" as arg name
           else if (val == offset_type_marker)
             sval = "control-code-" + std::to_string(colnum);
 
           size_t index = state->find_label_entry(m_args[0].substr(1));
           auto num_entries = state->parse_num_arg(m_args[1]);
+          const std::string ctrltext_patch_sec_name =
+              state->merged_ctrltext_elf()
+                  ? (".ctrltext." + std::to_string(colnum))
+                  : (".ctrltext." + std::to_string(colnum) + "." + std::to_string(pagenum));
           for (uint32_t numbd = 0; numbd < num_entries; ++numbd)
           {
             auto label = state->get_label_at(index);
             symbols.emplace_back(sval, state->parse_num_arg(label),
-                                 colnum, pagenum, 0, 0, ".ctrltext." + std::to_string(colnum)
-                                 + "." + std::to_string(pagenum),
+                                 colnum, pagenum, 0, 0, ctrltext_patch_sec_name,
                                  state->get_shim_dma_patching());
             ++index;
           }
@@ -122,8 +152,8 @@ serialize(std::shared_ptr<assembler_state> state, std::vector<symbol>& symbols,
           // arg 0 to 6 and be patched in CERT.
           // Beyond that its elfloader/host responsibility to patch mandatorily
           if (val > 6 && val != offset_type_marker)
-            std::cout <<"WARNING: Apply_offset_57 has arg index " << val << " > 6, Should be mandatorily patched in host!!!\n";
-          else if (val != offset_type_marker)
+            log_warn() << "Apply_offset_57 has arg index " << val << " > 6, Should be mandatorily patched in host!!!\n";
+          if (val != offset_type_marker)
           {
             // val is arg index, to get offset x2
             val = val * 2;
@@ -135,8 +165,8 @@ serialize(std::shared_ptr<assembler_state> state, std::vector<symbol>& symbols,
             auto usymbo = m_args[3].substr(1);
             if (state->m_scratchpad.find(usymbo) != state->m_scratchpad.end())
             {
-              auto num_entries = state->parse_num_arg(m_args[1]);
-              for (uint32_t numbd = 0; numbd < num_entries; ++numbd)
+              auto inner_num_entries = state->parse_num_arg(m_args[1]);
+              for (uint32_t numbd = 0; numbd < inner_num_entries; ++numbd)
               {
                 auto label = state->get_label_at(index);
                 state->m_patch[m_args[3]].emplace_back(label);
@@ -144,6 +174,22 @@ serialize(std::shared_ptr<assembler_state> state, std::vector<symbol>& symbols,
               }
             }
           }
+        }
+
+        // For apply_offset_pl, arg 'buffer_id' emits a pl_ddr_64 ELF relocation
+        // for the single wts_params block so XRT can patch words 8+9 at BO bind time.
+        if (!m_opcode->get_code_name().compare("apply_offset_pl") && !arg.get_name().compare("buffer_id"))
+        {
+          sval = std::to_string(val); // buffer_id is the XRT arg index
+          size_t index = state->find_label_entry(m_args[0].substr(1));
+          const std::string ctrltext_patch_sec_name =
+              state->merged_ctrltext_elf()
+                  ? (".ctrltext." + std::to_string(colnum))
+                  : (".ctrltext." + std::to_string(colnum) + "." + std::to_string(pagenum));
+          auto label = state->get_label_at(index);
+          symbols.emplace_back(sval, state->parse_num_arg(label),
+                               colnum, pagenum, 0, 0, ctrltext_patch_sec_name,
+                               symbol::patch_schema::pl_ddr_64);
         }
         if (!state->is_optimization_enabled_for_op(m_opcode->get_code_name())){
           ret.push_back(val & BYTE_MASK);
@@ -267,9 +313,9 @@ handle_descriptor_ptr_arg(uint32_t val,
 {
   auto slabels = state->get_labels();
   if (slabels.find(val) == slabels.end()) {
-    std::string label = get_label();
-    state->add_label(val, label);
-    return label;
+    std::string sym_label = get_label();
+    state->add_label(val, sym_label);
+    return sym_label;
   } else {
     return slabels.at(val);
   }
@@ -282,9 +328,9 @@ handle_table_ptr_arg(uint32_t val,
 {
   auto slocal_ptrs = state->get_local_ptrs();
   if (slocal_ptrs.find(val) == slocal_ptrs.end()) {
-    std::string label = get_label();
-    state->add_local_ptr(val, label, shim_bd_len);
-    return label;
+    std::string sym_label = get_label();
+    state->add_local_ptr(val, sym_label, shim_bd_len);
+    return sym_label;
   } else {
     return slocal_ptrs.at(val).first;
   }
@@ -299,9 +345,34 @@ handle_generic_const_arg(const opArg& arg, uint32_t val)
     val = val / 2;
   }
 
-  // Format as hexadecimal string
   std::ostringstream oss;
-  oss << "0x" << std::uppercase << std::hex << val;
+  
+  // Formatting rules based on ISA spec and original assembly patterns:
+  // 1. Addresses: always hex
+  // 2. Large data/value/mask fields (> 0xFFFF): hex (bit patterns, test data)
+  // 3. Small values, counts, IDs: decimal
+  
+  bool format_as_hex = false;
+  std::string arg_name = arg.get_name();
+  
+  if (val == offset_type_marker) {
+    // Special marker 0xFFFF for control code base address patching
+    format_as_hex = true;
+  } else if (arg_name == "address" || arg_name.find("addr") != std::string::npos) {
+    // Memory addresses should always be hex
+    format_as_hex = true;
+  } else if ((arg_name == "data" || arg_name == "value" || arg_name == "mask") && val > 0xFFFF) {
+    // Large data/value/mask fields are typically hex (bit patterns like 0xabcdabcd, 0x80000001)
+    format_as_hex = true;
+  }
+  
+  if (format_as_hex) {
+    oss << "0x" << std::uppercase << std::hex << val;
+  } else {
+    // Format as decimal for small values, counts, IDs, sizes, and flags
+    oss << val;
+  }
+  
   return oss.str();
 }
 
@@ -341,12 +412,14 @@ handle_barrier_arg(uint32_t val)
 
 std::string
 isa_op_deserializer::
-handle_page_id_arg(uint32_t val,
+handle_page_id_arg(uint32_t /*val*/,
                     std::shared_ptr<disassembler_state> state)
 {
-  std::string label = get_label();
-  state->add_external_label(val, label);
-  return label;
+  // PAGE_ID arguments reference text sections that come later
+  // Add to OOO label queue to be written at the start of the target section
+  std::string sym_label = get_label();
+  state->add_ooo_label(sym_label);
+  return sym_label;
 }
 
 uint32_t op_deserializer::numlabel = 0;
@@ -406,6 +479,11 @@ deserialize(asm_writer& writer, std::shared_ptr<disassembler_state> state, const
         }
     }
 
+    // Write .eop directive before eof instruction
+    if (m_opcode->get_code_name() == "eof") {
+        writer.write_eop();
+    }
+
     state->increment_address(size);
     writer.write_operation(m_opcode->get_code_name(), result, "");
     return size;
@@ -436,8 +514,8 @@ ucDmaBd_op_deserializer::
 deserialize(asm_writer& writer, std::shared_ptr<disassembler_state> state, const char* data)
 {
   assert(state->get_address() % align() == 0 && "uC DMA definition has to be 128-bit aligned!");
-  std::string label = state->get_labels().at(state->get_address());
-  writer.write_label(label);
+  std::string sym_label = state->get_labels().at(state->get_address());
+  writer.write_label(sym_label);
   int ctrl_next_BD = 1;
   uint32_t count = 0;
   constexpr uint32_t size_offset = 0;
@@ -468,14 +546,14 @@ deserialize(asm_writer& writer, std::shared_ptr<disassembler_state> state, const
       result.push_back(a3.str());
     }
 
-    uint32_t local_ptr_offset = arg[2] + state->get_address();
+    uint32_t lp_offset = arg[2] + state->get_address();
     auto slocal_ptr = state->get_local_ptrs();
-    if (slocal_ptr.find(local_ptr_offset) == slocal_ptr.end()) {
+    if (slocal_ptr.find(lp_offset) == slocal_ptr.end()) {
       std::string ptr_label = get_label();
       result.push_back(ptr_label);
-      state->add_local_ptr(local_ptr_offset, ptr_label, arg[0]);
+      state->add_local_ptr(lp_offset, ptr_label, arg[0]);
     } else {
-      result.push_back(slocal_ptr[local_ptr_offset].first);
+      result.push_back(slocal_ptr[lp_offset].first);
     }
 
     result.push_back(std::to_string(arg[0]));
@@ -506,8 +584,8 @@ deserialize(asm_writer& writer, std::shared_ptr<disassembler_state> state, const
 {
   uint32_t lp = state->get_address();
   auto label_pair = state->get_local_ptrs().at(lp);
-  std::string label = label_pair.first;
-  writer.write_label(label);
+  std::string sym_label = label_pair.first;
+  writer.write_label(sym_label);
   uint32_t count = label_pair.second;
   assert(count != 0 && ".long length is zero");
   uint32_t pos = 0;

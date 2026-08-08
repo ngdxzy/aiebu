@@ -20,7 +20,7 @@ jobs:
   build:
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-26.04, ubuntu-latest, ubuntu-24.04-arm, windows-2025-vs2026, windows-11-arm]
 
     runs-on: ${{ matrix.os }}
 
@@ -63,25 +63,37 @@ jobs:
           C:\vcpkg\installed
           C:\vcpkg\buildtrees
           C:\vcpkg\downloads
-        key: vcpkg-${{ runner.os }}-${{ hashFiles('**/vcpkg.json') }}
+        key: vcpkg-${{ runner.os }}-${{ matrix.os }}-${{ hashFiles('**/vcpkg.json') }}
         restore-keys: |
+          vcpkg-${{ runner.os }}-${{ matrix.os }}-
           vcpkg-${{ runner.os }}-
 
     - name: Install Dependencies (Windows) and configure CMake
       if: runner.os == 'Windows'
       run: |
-        vcpkg install --triplet=x64-windows
+        $isArm64 = "${{ matrix.os }}" -eq "windows-11-arm"
+        $triplet = if ($isArm64) { 'arm64-windows' } else { 'x64-windows' }
+        vcpkg install --triplet=$triplet
 
         # install python dependencies
         python -m pip install --upgrade pip
         python -m pip install pyyaml jinja2 Markdown pylint colorama gitPython wrapt
 
         # configure cmake specifying path to python
-        cmake -B ${{github.workspace}}/build/WBuild `
-        -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake `
-        -DCMAKE_BUILD_TYPE=Release `
-        -DPython3_EXECUTABLE=${{ env.PYTHON_EXECUTABLE }} `
-        -DAIEBU_PYTHON=ON
+        $cmakeArgs = @(
+          "-B", "${{github.workspace}}/build/WBuild",
+          "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake",
+          "-DCMAKE_BUILD_TYPE=Release",
+          "-DPython3_EXECUTABLE=${{ env.PYTHON_EXECUTABLE }}",
+          "-DAIEBU_PYTHON=ON"
+        )
+        if ($isArm64) {
+          $cmakeArgs += "-A", "ARM64", "-DCMAKE_SYSTEM_PROCESSOR=ARM64"
+        } else {
+          # Exercise MSVC whole-program optimization for the generated preemption data.
+          $cmakeArgs += "-DCMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE=ON"
+        }
+        cmake @cmakeArgs
 
     - name: Build (Linux)
       if: runner.os == 'Linux'
@@ -112,12 +124,14 @@ jobs:
     - name: Test (Linux)
       if: runner.os == 'Linux'
       run: |
-        cmake --build ${{github.workspace}}/build/Release --config Release --target test -j 4
+        ctest --test-dir ${{github.workspace}}/build/Release -C Release -j 4
+        ctest --test-dir ${{github.workspace}}/build/Release -C Release -L benchmark
 
     - name: Test (Windows)
       if: runner.os == 'Windows'
       run: |
-        cmake --build ${{github.workspace}}/build/WBuild --config Release --target run_tests -j 4
+        ctest --test-dir ${{github.workspace}}/build/WBuild -C Release -j 4
+        ctest --test-dir ${{github.workspace}}/build/WBuild -C Release -L benchmark
 
     - name: Package (Linux)
       if: runner.os == 'Linux'
@@ -133,13 +147,13 @@ jobs:
       if: runner.os == 'Linux' && (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')
       uses: actions/upload-artifact@v4
       with:
-        name: aiebu_release_linux
+        name: aiebu_release_${{ matrix.os }}
         path: ${{github.workspace}}/build/Release/AIEBU-*-Linux.tar.gz
 
     - name: Upload (Windows)
       if: runner.os == 'Windows' && (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')
       uses: actions/upload-artifact@v4
       with:
-        name: aiebu_release_windows
+        name: aiebu_release_${{ matrix.os }}
         path: ${{github.workspace}}/build/WBuild/AIEBU-*-win64.zip
         retention-days: 7

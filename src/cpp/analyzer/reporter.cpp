@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Copyright (C) 2024-2025, Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (C) 2024-2026, Advanced Micro Devices, Inc. All rights reserved.
 #include "reporter.h"
 #include "packets.h"
 #include "transaction.hpp"
@@ -28,7 +28,6 @@ namespace aiebu {
         }
         else if (m_buffer_type == aiebu::aiebu_assembler::buffer_type::elf_aie2_config ||
             m_buffer_type == aiebu::aiebu_assembler::buffer_type::elf_aie2ps_config ||
-            m_buffer_type == aiebu::aiebu_assembler::buffer_type::elf_aie4 ||
             m_buffer_type == aiebu::aiebu_assembler::buffer_type::elf_aie4_config) {
                throw error(error::error_code::internal_error, "Not supported");
         }
@@ -127,12 +126,15 @@ namespace aiebu {
                 stream << tprint.get_all_ops() << std::endl;
             }
         }
-        else if (m_buffer_type == aiebu::aiebu_assembler::buffer_type::blob_instr_transaction) {
+        else if (m_buffer_type == aiebu::aiebu_assembler::buffer_type::blob_instr_transaction ||
+                 m_buffer_type == aiebu::aiebu_assembler::buffer_type::blob_aie2ps ||
+                 m_buffer_type == aiebu::aiebu_assembler::buffer_type::blob_aie4) {
             disassemble_blob(root);
         }
-        else if (m_buffer_type == aiebu::aiebu_assembler::buffer_type::elf_aie2ps ) {
+        else if (m_buffer_type == aiebu::aiebu_assembler::buffer_type::elf_aie2ps ||
+                 m_buffer_type == aiebu::aiebu_assembler::buffer_type::elf_aie4) {
             try {
-                aiebu::asm_disassembler disasm(root.string(), std::cout);
+                aiebu::elf_asm_disassembler disasm(root.string(), std::cout, m_buffer_type);
                 disasm.run();
             } catch (const std::exception& ex) {
                 throw error(error::error_code::internal_error,
@@ -179,8 +181,23 @@ namespace aiebu {
                 stream << tprint.get_all_ops() << std::endl;
             }
         }
-        else if (m_buffer_type == aiebu::aiebu_assembler::buffer_type::blob_instr_transaction) {
+        else if (m_buffer_type == aiebu::aiebu_assembler::buffer_type::blob_instr_transaction ||
+                 m_buffer_type == aiebu::aiebu_assembler::buffer_type::blob_aie2ps ||
+                 m_buffer_type == aiebu::aiebu_assembler::buffer_type::blob_aie4) {
+            // Disassemble binary files - delegate to disassemble_blob for evaluation
             disassemble_blob(stream);
+        }
+        else if (m_buffer_type == aiebu::aiebu_assembler::buffer_type::elf_aie2ps ||
+                 m_buffer_type == aiebu::aiebu_assembler::buffer_type::elf_aie4) {
+            // Use elf_asm_disassembler with input stream
+            try {
+                std::istringstream iss(std::string(m_buffer.begin(), m_buffer.end()), std::ios::binary);
+                aiebu::elf_asm_disassembler disasm(iss, stream, m_buffer_type);
+                disasm.run();
+            } catch (const std::exception& ex) {
+                throw error(error::error_code::internal_error,
+                    "ELF disassembler error: " + std::string(ex.what()));
+            }
         }
         else {
             throw error(error::error_code::invalid_buffer_type,
@@ -196,8 +213,24 @@ namespace aiebu {
 
     void reporter::disassemble_blob(std::ostream &stream) const
     {
-        transaction tprint(m_buffer.data(), m_buffer.size());
-        stream << tprint.get_all_ops() << std::endl;
+        try {
+            if (m_buffer_type == aiebu::aiebu_assembler::buffer_type::blob_aie2ps ||
+                m_buffer_type == aiebu::aiebu_assembler::buffer_type::blob_aie4) {
+                aiebu::bin_asm_disassembler disasm(m_buffer, stream, m_buffer_type);
+                disasm.run();
+            }
+            else if (m_buffer_type == aiebu::aiebu_assembler::buffer_type::blob_instr_transaction) {
+                transaction tprint(m_buffer.data(), m_buffer.size());
+                stream << tprint.get_all_ops() << std::endl;
+            }
+            else {
+                throw error(error::error_code::invalid_buffer_type,
+                    "disassemble_blob called with unsupported buffer type");
+            }
+        } catch (const std::exception& ex) {
+            throw error(error::error_code::internal_error,
+                "Binary disassembler error: " + std::string(ex.what()));
+        }
     }
 
     void reporter::disassemble_blob(const std::filesystem::path &root) const

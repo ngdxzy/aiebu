@@ -1,0 +1,129 @@
+// SPDX-License-Identifier: MIT
+// Copyright (C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
+
+#include "dtrace/action/action_control.h"
+#include <sstream>
+#include <stdexcept>
+
+namespace dtrace::action
+{
+
+//-------------------------count_action::count_action-------------------------//
+/**
+ * count_action() - Constructor with action token, probe type and probe name.
+ * It parses the token and extracts the result, action name and arguments.
+ *
+ * @param token
+ *  Count action token: val = count()
+ * @param probe_type
+ * @param probe_name
+ */
+count_action::
+count_action(std::string token, uint32_t probe_type, const std::string& probe_name)
+    : action(probe_type, probe_name)
+{
+    std::vector<std::string> fields;
+    std::stringstream token_stream(token);
+    std::string item;
+    while (std::getline(token_stream, item, '='))
+        fields.push_back(action::strip(item));
+
+    if (fields.size() != 2)
+        DTRACE_ERROR("DTRACE_ACTION_INVALID_TOKEN", 
+            "Invalid token: '" << token << "' Expected 'val = count()'");
+    
+    m_result = fields[0];
+
+    aiebu::smatch action;
+    if (!aiebu::regex_match(fields[1], action, action_name::action_regex))
+        DTRACE_ERROR("DTRACE_ACTION_INVALID_TOKEN", 
+            "Invalid token: '" << token << "' Expected 'count()'");
+
+    m_action_name = action[1];
+}
+
+//-------------------------count_action::actionize-------------------------//
+/**
+ * actionize() - Adds count action values to the control buffer.
+ *
+ * @param last 
+ *  Last action for the current probe.
+ * @param control_buffer 
+ * @param mem_buffer 
+ */
+void
+count_action::
+actionize(uint32_t last, std::vector<uint32_t>& control_buffer, std::vector<uint32_t>&)
+{
+    // control buffer
+    // count action header
+    control_buffer.push_back(
+        (last << dtrace::dtrace_ctrl::second_byte_shift) | action_type::count
+    );
+    set_location(control_buffer, false);
+    // count value
+    control_buffer.push_back(dtrace::dtrace_ctrl::result_value_init);
+}
+
+//-------------------------count_action::serialize_helper-------------------------//
+/**
+ * serialize_helper() - Helper function to serialize action.
+ *
+ * @param result_buffer
+ * @param mapping
+ *
+ * @return 
+ *  The value from the result buffer based on the location mapping and
+ *  resets the value in the result buffer after serialization.
+ */
+uint32_t
+count_action::
+serialize_helper(uint32_t* result_buffer,
+    const std::unordered_map<uint32_t, uint32_t>& mapping) const
+{
+    uint32_t location = mapping.at(get_location(false));
+    uint32_t result = result_buffer[location] - dtrace::dtrace_ctrl::result_value_init;
+    // reset value after serialization
+    result_buffer[location] = dtrace::dtrace_ctrl::result_value_init;
+    return result;
+}
+
+//-------------------------count_action::serialize-------------------------//
+/**
+ * serialize() - Serializes the count action into a string format.
+ *
+ * @param result_buffer
+ * @param mem_buffer
+ * @param mapping
+ * @param script_output
+ */
+void
+count_action::
+serialize(uint32_t* result_buffer, uint32_t*,
+    const std::unordered_map<uint32_t, uint32_t>& mapping, std::ostream& script_output) const
+{
+    uint32_t result = count_action::serialize_helper(result_buffer, mapping);
+    // serialize string format
+    script_output << "  " << m_result << " = " << result << "\n";
+}
+
+//-------------------------count_action::serialize-------------------------//
+/**
+ * serialize() - Serializes the count action into json format.
+ *
+ * @param result_buffer
+ * @param mem_buffer
+ * @param mapping
+ * @param json_output
+ */
+void
+count_action::
+serialize(uint32_t* result_buffer, uint32_t*,
+    const std::unordered_map<uint32_t, uint32_t>& mapping, json& json_output) const
+{
+    uint32_t result = count_action::serialize_helper(result_buffer, mapping);
+    // serialize json format
+    json_output[m_probe_name][m_result] = result;
+}
+
+} // namespace dtrace::action

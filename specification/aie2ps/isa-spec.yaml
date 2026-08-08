@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# Copyright (C) 2023-2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright (C) 2023-2026 Advanced Micro Devices, Inc. All rights reserved.
 ---
 platform:
   architecture: aie2ps
@@ -113,9 +113,14 @@ operations:
     description: |
       Indicates the start of a new job and creates a new entry in the job table,
       if preemption flag has been set. The flag is cleared when preemption is
-      checked, and is set if preemption happens.
+      checked, and is set if preemption happens, so the job runs only if the flag indicates that a
+      preemption occurred when the condition is checked.
       The job size is auto-calculated and inserted by the assembler and not supplied
       explicitly by the user.
+      In multi-uC case, CERT will do barrier sync after this job, so each uC should have the same number
+      of this type of conditional jobs.
+      The conditional job can share page with other jobs, and all jobs following this job in the page
+      don't start before this job is done.
   - mnemonic: UC_DMA_WRITE_DES
     opcode: 0x01
     regular: True
@@ -220,6 +225,7 @@ operations:
       execution of other (non-blocked) jobs during that time.
       Use this operation only for tasks which have TCTs enabled and where the TCTs are
       routed to arrive at the uC executing this operation.
+
       Note that tasks can be enqueued from any jobs, but only one job can call `WAIT_TCTS`. And
       waiting for more tcts than enqueued will hang the job forever
   - mnemonic: END_JOB
@@ -490,6 +496,8 @@ operations:
       ```
       REMOTE_BARRIER      $rb0, 0xC
       ```
+
+      Note that it is not necessary for all prior jobs to complete before the barrier matures.
   - mnemonic: EOF
     opcode: 0xff
     regular: False
@@ -618,14 +626,26 @@ operations:
     brief: save/restore context of an inference at preemption point in control code
     description: |
       If the control code supports preemption, there will be preemption points inserted in it. `id` specifies the preemption
-      point index. We assume all aie cores are stateless, so at each preemption point, we only need to save/restore contents
-      in memtile. `save_control_code_offset` specifies a relative address in unit of page to the 1st page of the control code,
+      point index. `id` values should be consecutive, starting with index 0. We assume all aie cores are stateless,
+      so at each preemption point, we only need to save/restore contents in memtile.
+      `save_control_code_offset` specifies a relative address in unit of page to the 1st page of the control code,
       and this address is where the `SAVE` control code resides. `restore_control_code_offset` specifies a relative address in
       unit of page to the 1st page of control code, and this address is where the `RESTORE` control code resides. The opcode
       can determine whether preemption is required, and if required, it can also distinguish whether it is to `SAVE` or to
       `RESTORE`, and run the `SAVE` or `RESTORE` control code accordingly.
-      In multi-uc case, for each preemption point id, the control code of each uc should have this opcode with same `id`.
-      This opcode should take one whole job which in turn should take one whole page.
+      In multi-uC case, at each preemption point, CERT will do barrier sync regardless of whether the preemption happens or not, so
+      for each preemption point id, the control code of each uc should have this opcode with same `id`.
+      This opcode should take one whole job but the job can share page with other jobs.
+
+      Note:
+
+      1. When this opcode runs, all prior jobs have to complete, but async tasks triggered by prior jobs don't need to complete.
+         For example, if a prior job triggers a prefetch of weights through shimDMA, the shimDMA doesn't need to complete
+
+      2. When this opcode runs, all following jobs in the same page don't start before this preemption job is done
+      
+      3. `SAVE` and `RESTORE` control code each has self-contained stream switch routing for themselves. The routing information
+      will be cleared after `SAVE` and `RESTORE` are done
   - mnemonic: LOAD_PDI
     opcode: 0x1a
     regular: True
@@ -642,11 +662,30 @@ operations:
         width: 16
     brief: load pdi
     description: |
-      pdi itself is also a piece of control code. It can be loaded by other control code at anywhere anytime.
-      `pdi_id` is an elf wide unique id and specifies an unique pdi. consecutive loading of same pdi results in following
-      loading skipped by the uC. `pdi_host_addr_offset` specifies a relative address in unit of page to the 1st page of
-      the control code and is where the pdi control code resides
-      This opcode should take one whole job which in turn should take one whole page.
+      A PDI itself is also a piece of control code. It can be loaded by other control code anywhere anytime.
+      `pdi_id` is an ELF-wide unique ID and specifies a unique PDI. If multiple control code ELFs run in one hwctx,
+      the `pdi_id` should be hwctx-wide unique. `pdi_id` value of `0xffffffff` is reserved and invalid for opcode use, 
+      as CERT initializes the last PDI ID to this value. When this opcode runs, consecutive loading of same PDI will cause subsequent
+      loading skipped by the uC. `pdi_host_addr_offset` specifies a page-unit relative address to the 1st page of
+      the control code, indicating where the PDI control code resides
+      This opcode should take one whole job but the job can share a page with other jobs. All jobs following the load_pdi job
+      don't start before the load_pdi job is done.
+      In the multi-uC case, CERT will do barrier sync after the load_pdi job, so each uC needs to have the same number of load_pdi jobs
+
+      According to the AIE spec,
+      ```
+      For full reconfiguration of the cores' program memory, the following steps may be taken.
+
+      Wait for core to reach a known synchronization point (lock, or Core done)
+
+      Reset, disable core (Section 5.12.2)
+
+      Write PM
+
+      Unreset, enable core
+      ```
+
+      Note that if core ELF is part of PDI, reset/unreset core and enable/disable of the core are required. This should be part of the generated control code.
   - mnemonic: LOAD_CORES
     opcode: 0x04
     regular: True
@@ -663,7 +702,39 @@ operations:
         width: 16
     brief: load cores
     description: |
-      This essentially is same to LOAD_PDI except that CERT will save the elf info for aie cores to different location than the pdi so that cert can do recovery of both during preemption
+      This is essentially the same as LOAD_PDI except that CERT will save the ELF info for AIE cores to a different location than the PDI so that CERT can recover both during preemption.
+      `core_elf_id` value of `0xffffffff` is reserved and invalid for opcode use, as CERT initializes the last core ELF ID to this value.
+
+      Note that similar to LOAD_PDI, reset/unreset and enable/disable of the core are required to load a new core ELF. This should be part of the generated control code.
+  - mnemonic: LOAD_CORES_CP
+    opcode: 0x20
+    regular: True
+    arguments:
+      - type: pad
+        width: 16
+      - name: core_elf_id
+        type: const
+        width: 32
+    brief: load cores_cp
+    description: |
+      This is to load control packet format core ELFs. Compared to the `LOAD_CORES`,
+      this opcode assumes the control code to load the control packet through shimDMA fits a page,
+      so the current page that holds this opcode will not be overwritten.
+      As a result, the control-packet-loading code can be placed immediately after this opcode and kept in a single job. 
+      The `core_elf_id` in this opcode and the one in `LOAD_CORES` share the same ID space, so if both `LOAD_CORES` and `LOAD_CORES_CP`are present, CERT saves the ID of the last one.
+      `core_elf_id` value of `0xffffffff` is reserved and invalid for opcode use, as CERT initializes the last core ELF ID to this value.
+
+      Notes:
+
+      1. Similar to LOAD_PDI, reset/unreset core and enable/disable of the core are required to load a new core ELF. This should be part of the generated control code.
+
+      2. Completion of shimDMA transferring control packet blob doesn't imply the completion of the control packet loading.
+      Control code itself is responsible for checking completion of control packet loading.
+      There are two approaches for doing this, one is to enable the write response of the last control packet and the other is to add one extra control packet write to a known register.
+      For the former approach, routing for response packet should be configured, and `WAIT_TCTS` is used to check the response. 
+      For the latter approach, `POLL_32`/`MASK_POLL_32` is used to check the register of the extra control packet.
+
+      3. In the broadcast case, completion check should be performed on all destination cores.
   - mnemonic: LOAD_LAST_PDI
     opcode: 0x1b
     regular: True
@@ -672,8 +743,15 @@ operations:
         width: 16
     brief: load last loaded pdi
     description: |
-      Used in preemption restore case. The info (pdi id and location in host ddr) of the pdi last time loaded is saved
-      in firmware. During restore (after a context switch), the last loaded pdi will be loaded with this opcode
+      Used in the preemption restore case. The info (PDI ID and location in host DDR) of the most recently loaded PDI is saved by the firmware. During restore (after a context switch), the last loaded PDI will be loaded with this opcode.
+
+      Notes:
+
+      1. CERT saves information for the last PDI and the last core ELF.
+
+      2. The last core ELF can be from either `LOAD_CORES` or `LOAD_CORES_CP`, whichever ran last.
+
+      3. When preemption is supported, `LOAD_PDI` is mandatory; that is, there must be at least one `LOAD_PDI` before any preemption point is inserted. `LOAD_CORES`/`LOAD_CORES_CP` are optional.
   - mnemonic: SAVE_TIMESTAMPS
     opcode: 0x1c
     regular: True
@@ -702,6 +780,8 @@ operations:
     description: |
       Sleep instruction makes the current job busy waiting `target` microseconds. This opcode is for test purpose
       only. Calling this operation doesn't yield control to another job.
+
+      Note that this opcode is not supported in release CERT. Dtrace action sleep() is recommended for this test purpose.
   - mnemonic: SAVE_REGISTER
     opcode: 0x1e
     regular: True
@@ -719,6 +799,109 @@ operations:
       Used to save the register address values. AIE compiler will also add unique identifier while generating control code.
       Values will be saved in the shared data memory. Whenever the allocated shared memory gets fille, CERT will start uC-DMA
       to transfer data from sDM to host memory.
+  - mnemonic: REL_ACQ_SYNC
+    opcode: 0x21
+    regular: True
+    arguments:
+      - type: pad
+        width: 16
+      - name: rel_address
+        type: const
+        width: 32
+      - name: acq_address
+        type: const
+        width: 32
+    brief: Reads the release address and immediately busy-waits on the acquire address to support the release-acquire lock pattern.
+    description: |
+      This operation allows for implementing a release-acquire lock pattern for compact and  fast global-barrier implementation across all participating uC's
+      The compiler is responsible for allocating the locks and  calculating appropriate relaease and aquire addresses.
+      Example:
+      ```
+      ; rel_address and acq_address shall always refer to the same lock.
+      ; rel_address shall contain a release operation on the lock.
+      ; acq_addres shall contain an acquire operation on the lock.
+      ; rel_val possible values are only -1 or 1
+      ; acq_val possible values are only 0 or numUCsParticipatingInLock
+
+      REL_ACQ_SYNC 0x0205720c, 0x02057004 ; barrierId: 0, lockId: 28, release_aquire relVal: 1  acqVal:  3
+
+      ```
+
+  - mnemonic: UC_DMA_MASK_POLL_EXT
+    opcode: 0x22
+    regular: True
+    arguments:
+      - type: pad
+        width: 16
+      - name: addr_hi
+        type: const
+        width: 32
+      - name: addr_lo
+        type: const
+        width: 32
+      - name: mask
+        type: const
+        width: 32
+      - name: value
+        type: const
+        width: 32
+    brief: Polls an external (NoC-mapped) register until (read & mask) == value.
+    description: |
+      Reads a 32-bit value from the external address formed by (addr_hi << 32 | addr_lo) via
+      a uC-DMA MM2DM transfer and busy-waits until (read_value & mask) == value.
+      Analogous to MASK_POLL_32 but for addresses outside the AIE array register space,
+      reachable via NMU -> NoC (e.g. PL IP AXI-Lite registers).
+      Used to poll ap_done (bit[1]) of a wts_pl_ctrl AP_CTRL register after triggering ap_start.
+      Example:
+      ```
+      ; Poll ap_done (bit[1]) on wts_pl_ctrl instance 0 (base 0x80000030000):
+      UC_DMA_MASK_POLL_EXT 0x00000800, 0x00030000, 0x00000002, 0x00000002
+      ```
+
+  - mnemonic: APPLY_OFFSET_PL
+    opcode: 0x23
+    regular: True
+    arguments:
+      - name: table_ptr
+        type: const
+        width: 16
+      - name: buffer_id
+        type: const
+        width: 16
+      - type: pad
+        width: 16
+    brief: Patches the physical DDR address (words 8+9) of one or more wts_params blocks for PL IP start_address.
+    description: |
+      Patches wts_params blocks (each 10 words / 40 bytes) starting at `table_ptr`.
+      XRT resolves `buffer_id` to a 64-bit physical address at BO bind time and
+      writes word[8] <- phys_addr[31:0] and word[9] <- phys_addr[63:32] in each block.
+      Example:
+      ```
+      START_JOB 1
+        APPLY_OFFSET_PL @wts_params, WTS_BUFFER_ID
+        UC_DMA_WRITE_DES_SYNC @wts_pl_bd_chain
+        UC_DMA_MASK_POLL_EXT 0x00000800, 0x00030000, 0x00000002, 0x00000002
+      END_JOB
+      .align 16
+      wts_pl_bd_chain:
+        UC_DMA_BD 0x800, 0x00030010, @wts_params, 10, 1, 1
+        UC_DMA_BD 0x800, 0x00030000, @val_ap_start, 1, 1, 0
+      .align 4
+      wts_params:
+        .long 0x00000000 ; word 0  offset
+        .long 0x00000000 ; word 1  (reserved)
+        .long 0x00000004 ; word 2  length
+        .long 0x00000000 ; word 3  (reserved)
+        .long 0x00000000 ; word 4  stride
+        .long 0x00000000 ; word 5  (reserved)
+        .long 0x00000001 ; word 6  iterations
+        .long 0x00000000 ; word 7  (reserved)
+        .long 0x00000000 ; word 8  start_addr[31:0]  <- APPLY_OFFSET_PL
+        .long 0x00000000 ; word 9  start_addr[63:32] <- APPLY_OFFSET_PL
+      val_ap_start:
+        .long 0x00000001
+      ```
+
 directives:
   - mnemonic: .long
     brief: Specifies a 4 byte integer value.
@@ -905,7 +1088,7 @@ directives:
       ...
       ;For telluride
       .target aie2ps
-      ;For soundwave
+      ;For npu3
       .target aie4-a
       ;For medusa
       .target aie4

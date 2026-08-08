@@ -28,6 +28,7 @@ add_test(NAME "aiebu_cmake"
   "-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}" 
   "-DCMAKE_PREFIX_PATH=${AIEBU_INSTALL_STAGING_DIR}" 
   "-DAIEBU_MSVC_LEGACY_LINKING=${MSVC_LEGACY_LINKING}" 
+  "-UAIEBU_DIR"
   "${CMAKE_CURRENT_SOURCE_DIR}/sample"
   WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
 
@@ -37,5 +38,6 @@ add_test(NAME "aiebu_cmake_build"
   cmake --build . --verbose --config $<CONFIG>
   WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
 
-set_tests_properties(aiebu_cmake PROPERTIES SKIP_RETURN_CODE 77)
-set_tests_properties(aiebu_cmake_build PROPERTIES SKIP_RETURN_CODE 77)
+set_tests_properties("aiebu_cmake" PROPERTIES SKIP_RETURN_CODE 77)
+set_tests_properties("aiebu_cmake_build" PROPERTIES SKIP_RETURN_CODE 77)
+set_tests_properties("aiebu_cmake_build" PROPERTIES DEPENDS "aiebu_cmake")

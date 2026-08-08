@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Copyright (C) 2024-2025, Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (C) 2024-2026, Advanced Micro Devices, Inc. All rights reserved.
 
 #include "utils.h"
 #include "writer.h"
@@ -27,6 +27,14 @@ write_word(uint32_t word)
   write_byte((word >> FORTH_BYTE_SHIFT) & BYTE_MASK);
 }
 
+
+void
+section_writer::
+reserve(size_t capacity)
+{
+  m_data.reserve(capacity);
+}
+
 offset_type
 section_writer::
 tell() const
@@ -48,10 +56,10 @@ read_word(offset_type offset) const
   return result;
 }
 
-void
-section_writer::
-write_word_at(offset_type offset, uint32_t word)
+void section_writer::write_word_at(offset_type offset, uint32_t word)
 {
+  if (offset >= m_data.size() || m_data.size() - offset < sizeof(uint32_t))
+    throw error(error::error_code::internal_error, "write_word_at: offset out of range");
   m_data[offset] = ((word >> FIRST_BYTE_SHIFT) & BYTE_MASK);
   m_data[offset + 1] = ((word >> SECOND_BYTE_SHIFT) & BYTE_MASK);
   m_data[offset + 2] = ((word >> THIRD_BYTE_SHIFT) & BYTE_MASK);
@@ -66,8 +74,9 @@ padding(offset_type pagesize)
   if (datasize > pagesize)
     throw error(error::error_code::internal_error, "page content more the pagesize !!!");
   auto padsize = pagesize - datasize;
-  for( auto i=0U; i<padsize; ++i)
-    write_byte(0x00);
+  if (padsize > 0) {
+    m_data.insert(m_data.end(), padsize, 0x00);
+  }
 }
 
 asm_writer::asm_writer(std::ostream& stream)
@@ -112,6 +121,11 @@ void asm_writer::write_label(const std::string& name)
 void asm_writer::write_attach_to_group(int col)
 {
   for_all_streams(m_streams, [&](std::ostream* s) { (*s) << ".attach_to_group " << col << '\n'; });
+}
+
+void asm_writer::write_partition(const std::string& partition_str)
+{
+  for_all_streams(m_streams, [&](std::ostream* s) { (*s) << ".partition\t " << partition_str << '\n'; });
 }
 
 void asm_writer::write_directive(const std::string& name)

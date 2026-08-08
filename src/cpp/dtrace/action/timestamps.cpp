@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Copyright (C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
 
 #include "dtrace/action/action_control.h"
 #include <sstream>
@@ -26,29 +26,29 @@ timestamps_action(std::string token, uint32_t probe_type, const std::string& pro
     std::stringstream token_stream(token);
     std::string item;
     while (std::getline(token_stream, item, '='))
-        fields.push_back(strip(item));
+        fields.push_back(action::strip(item));
 
     if (fields.size() != 2)
         DTRACE_ERROR("DTRACE_ACTION_INVALID_TOKEN", 
             "Invalid token: '" << token << "' Expected 'name[length] = timestamps()'");
 
     // Regex pattern to match '<name>[<length>]' format
-    boost::regex buffer_regex(R"(^(.+)\[(.+)\]$)");
-    boost::smatch buffer;
-    if (!boost::regex_match(fields[0], buffer, buffer_regex))
+    aiebu::regex buffer_regex(R"(^(.+)\[(.+)\]$)");
+    aiebu::smatch buffer;
+    if (!aiebu::regex_match(fields[0], buffer, buffer_regex))
         DTRACE_ERROR("DTRACE_ACTION_INVALID_TOKEN", 
             "Invalid token: '" << token << "' Expected 'name[length]'");
 
     m_result = buffer[1];
     std::string length = buffer[2];
 
-    boost::smatch action;
-    if (!boost::regex_match(fields[1], action, action_name::action_regex))
+    aiebu::smatch action;
+    if (!aiebu::regex_match(fields[1], action, action_name::action_regex))
         DTRACE_ERROR("DTRACE_ACTION_INVALID_TOKEN", 
             "Invalid token: '" << token << "' Expected 'timestamps()'");
 
     m_action_name = action[1];
-    m_length = std::stoull(length, nullptr, 0);
+    m_length = static_cast<uint32_t>(std::stoull(length, nullptr, 0));
 }
 
 //-------------------------timestamps_action::actionize-------------------------//
@@ -75,48 +75,121 @@ actionize(uint32_t last, std::vector<uint32_t>& control_buffer, std::vector<uint
     // timestamp values for m_length
     for (size_t i = 0; i < m_length; ++i)
     {   // timestamp high values
-        control_buffer.push_back(0);
+        control_buffer.push_back(dtrace::dtrace_ctrl::result_value_init);
         // timestamp low values
-        control_buffer.push_back(0);
+        control_buffer.push_back(dtrace::dtrace_ctrl::result_value_init);
     }
+}
+
+//-------------------------timestamps_action::serialize_helper-------------------------//
+/**
+ * serialize_helper() - Helper function to serialize action.
+ *
+ * @param result_buffer
+ * @param mapping
+ *
+ * @return 
+ *  The value from the result buffer based on the location mapping and
+ *  resets the value in the result buffer after serialization.
+ */
+std::vector<uint64_t>
+timestamps_action::
+serialize_helper(uint32_t* result_buffer,
+    const std::unordered_map<uint32_t, uint32_t>& mapping) const
+{
+    std::vector<uint64_t> result;
+    for (uint32_t i = 0; i < m_length; ++i) 
+    {
+        // action location + length word + high and low value
+        uint32_t location = mapping.at(get_location(false)) + 1 + i * dtrace::action::action_ctrl::timestamps_value_size;
+        uint64_t high = static_cast<uint64_t>(result_buffer[location]) << dtrace::dtrace_ctrl::forth_byte_shift;
+        uint64_t low = result_buffer[location + 1];
+        result.push_back(high + low);
+        // reset value after serialization
+        result_buffer[location] = dtrace::dtrace_ctrl::result_value_init;
+        result_buffer[location + 1] = dtrace::dtrace_ctrl::result_value_init;
+    }
+    return result;
 }
 
 //-------------------------timestamps_action::serialize-------------------------//
 /**
- * serialize() - Serializes the timestamp action into a string format.
+ * serialize() - Serializes the multiple timestamp action into a string format.
  *
  * @param result_buffer
  * @param mem_buffer
  * @param mapping
- *
- * @return 
- *  String representing the serialized timestamp action.
+ * @param script_output
  */
-std::string
+void
 timestamps_action::
-serialize(const std::vector<uint32_t>& result_buffer, const std::vector<uint32_t>&, 
-    const std::unordered_map<uint32_t, uint32_t>& mapping) const
+serialize(uint32_t* result_buffer, uint32_t*,
+    const std::unordered_map<uint32_t, uint32_t>& mapping, std::ostream& script_output) const
 {
-    
-    std::vector<uint64_t> result;
-    for (uint32_t i = 0; i < m_length; ++i) {
-        // action location + length word + high and low value
-        uint32_t location = mapping.at(get_location(false)) + 1 + i*2;
-        uint64_t high = static_cast<uint64_t>(result_buffer[location]) << dtrace::dtrace_ctrl::forth_byte_shift;
-        uint64_t low = result_buffer[location + 1];
-        result.push_back(high + low);
+    std::vector<uint64_t> result = timestamps_action::serialize_helper(result_buffer, mapping);
+    uint64_t result_init = (static_cast<uint64_t>(dtrace::dtrace_ctrl::result_value_init) << dtrace::dtrace_ctrl::forth_byte_shift) 
+                         + dtrace::dtrace_ctrl::result_value_init;
+    // Check if probe fired
+    bool has_data = false;
+    for (const auto& timestamp : result) {
+        if (timestamp != result_init) {
+            has_data = true;
+            break;
+        }
+    }
+    if (!has_data) {
+        m_result_type = action_result_type::read_action_not_fired;
+        return;
     }
 
-    std::ostringstream output_action;
-    output_action << "  " << m_result << " = [";
+    // serialize string format
+    script_output << "  " << m_result << " = [";
     for (size_t i = 0; i < result.size(); ++i) {
-        output_action << result[i];
+        script_output << result[i];
         if (i != result.size() - 1)
-            output_action << ", ";
+            script_output << ", ";
     }
-    output_action << "]\n";
-    
-    return output_action.str();
+    script_output << "]\n";
+    m_result_type = action_result_type::read_action_fired;
+}
+
+//-------------------------timestamps_action::serialize-------------------------//
+/**
+ * serialize() - Serializes the multiple timestamp action into json format.
+ *
+ * @param result_buffer
+ * @param mem_buffer
+ * @param mapping
+ * @param json_output
+ */
+void
+timestamps_action::
+serialize(uint32_t* result_buffer, uint32_t*,
+    const std::unordered_map<uint32_t, uint32_t>& mapping, json& json_output) const
+{
+    std::vector<uint64_t> result = timestamps_action::serialize_helper(result_buffer, mapping);
+    uint64_t result_init = (static_cast<uint64_t>(dtrace::dtrace_ctrl::result_value_init) << dtrace::dtrace_ctrl::forth_byte_shift) 
+                         + dtrace::dtrace_ctrl::result_value_init;
+    // Check if probe fired
+    bool has_data = false;
+    for (const auto& timestamp : result) {
+        if (timestamp != result_init) {
+            has_data = true;
+            break;
+        }
+    }
+    if (!has_data) {
+        m_result_type = action_result_type::read_action_not_fired;
+        return;
+    }
+
+    // serialize json format
+    json json_result = json::array();
+    for (uint32_t i = 0; i < result.size(); ++i)
+        json_result.push_back(result[i]);
+
+    json_output[m_probe_name][m_result] = json_result;
+    m_result_type = action_result_type::read_action_fired;
 }
 
 } // namespace dtrace::action

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Copyright (C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
 
 #include "dtrace/action/action_control.h"
 #include "dtrace/probe/probe_control.h"
@@ -33,7 +33,7 @@ print_action(std::string token, uint32_t probe_type, const std::string& probe_na
     std::stringstream token_stream(m_token);
     std::string item;
     while (std::getline(token_stream, item, '='))
-        fields.push_back(strip(item));
+        fields.push_back(action::strip(item));
 
     std::string temp = fields[0];
     size_t position = temp.find('(');
@@ -46,7 +46,7 @@ print_action(std::string token, uint32_t probe_type, const std::string& probe_na
     std::string argument_string = temp.substr(position + 1, temp.length() - position - 2);
     std::stringstream argument_stream(argument_string);
     while (std::getline(argument_stream, item, ','))
-        m_arguments.push_back(strip(item));
+        m_arguments.push_back(action::strip(item));
 
     if (m_arguments.size() < 1)
         DTRACE_ERROR("DTRACE_ACTION_INVALID_TOKEN_ARGUMENTS", 
@@ -94,23 +94,38 @@ actionize(uint32_t, std::vector<uint32_t>&, std::vector<uint32_t>&)
  * @param result_buffer
  * @param mem_buffer
  * @param mapping
- *
- * @return 
- *  String representing the serialized print action.
+ * @param script_output
  */
-std::string
+void
 print_action::
-serialize(const std::vector<uint32_t>&, const std::vector<uint32_t>&, 
-    const std::unordered_map<uint32_t, uint32_t>&) const
+serialize(uint32_t*, uint32_t*,
+    const std::unordered_map<uint32_t, uint32_t>&, std::ostream& script_output) const
 {
-    std::ostringstream output_action;
+    // serialize string format
     for (const auto& [key, value] : m_built_ins)
     {
         if (m_token.find(key) != std::string::npos)
-            output_action << "  " << key << " = " << '"' << value << '"' << "\n";
+            script_output << "  " << key << " = " << '"' << value << '"' << "\n";
     }
-    output_action << "  " << m_token << "\n";
-    return output_action.str();
+    script_output << "  " << m_token << "\n";
+    m_result_type = action_result_type::print_action_fired;
+}
+
+//-------------------------print_action::serialize-------------------------//
+/**
+ * serialize() - Serializes the print action into json format.
+ *
+ * @param result_buffer
+ * @param mem_buffer
+ * @param mapping
+ * @param json_output
+ */
+void
+print_action::
+serialize(uint32_t*, uint32_t*,
+    const std::unordered_map<uint32_t, uint32_t>&, json&) const
+{
+    m_result_type = action_result_type::print_action_fired;
 }
 
 } // namespace dtrace::action

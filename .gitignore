@@ -8,3 +8,5 @@ build/Release*
 __pycache__
 compile_commands.json
 build/
+*.swp
+*.elf

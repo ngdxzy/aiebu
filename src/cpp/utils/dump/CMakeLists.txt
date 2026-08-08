@@ -11,9 +11,9 @@ set_target_properties(aiebu_dump_objects PROPERTIES
   INCLUDE_DIRECTORIES ""  # Clear inherited dirs
   )
 
+target_include_directories(aiebu_dump_objects SYSTEM PRIVATE ${AIEBU_ELFIO_SRC_DIR})
 target_include_directories(aiebu_dump_objects
   PRIVATE
-  ${AIEBU_ELFIO_SRC_DIR}
   ${AIEBU_SOURCE_DIR}/src/cpp/include
   ${AIEBU_SOURCE_DIR}/src/cpp/cxxopts/include
   ${AIEBU_SOURCE_DIR}/src/cpp
@@ -58,6 +58,6 @@ endif()
 
 install(TARGETS aiebu-dump
   RUNTIME DESTINATION ${AIEBU_INSTALL_BIN_DIR}
-  CONFIGURATIONS Debug Release
+  CONFIGURATIONS Debug Release RelWithDebInfo
   COMPONENT ${AIEBU_COMPONENT}
   )

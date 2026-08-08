@@ -5,14 +5,29 @@
 
 #include "symbol.h"
 #include "aiebu/aiebu_error.h"
+#include "aiebu/aiebu_assembler.h"
+#include "file_utils.h"
+
+#include <boost/property_tree/ptree.hpp>
 
 #include <algorithm>
+#include <cstdint>
 #include <map>
+#include <stdexcept>
 #include <vector>
 #include <unordered_map>
 #include <string>
 
 namespace aiebu {
+
+class global_custom_section_storage
+{
+  std::map<std::string, std::vector<uint8_t>> m_map;
+
+public:
+  const std::map<std::string, std::vector<uint8_t>>& map() const { return m_map; }
+  void assign(std::map<std::string, std::vector<uint8_t>> parsed) { m_map = std::move(parsed); }
+};
 
 class preprocessor_input
 {
@@ -59,6 +74,36 @@ protected:
     return mangled_name;
   }
 
+  std::map<std::string, std::vector<uint8_t>> parse_custom_sections(
+      const boost::property_tree::ptree& pt,
+      const std::vector<std::string>& paths,
+      const file_artifact* artifacts = nullptr)
+  {
+    std::map<std::string, std::vector<uint8_t>> custom_sections;
+    const auto& pt_custom_sections = pt.get_child_optional("custom_section");
+    if (pt_custom_sections) {
+      for (const auto& [sec_unused, section] : pt_custom_sections.get()) {
+        auto section_name = section.get<std::string>("section_name");
+        if (custom_sections.count(section_name))
+          throw error(error::error_code::invalid_input,
+                     "custom_section: duplicate section_name \"" + section_name + "\"");
+        auto section_path = section.get<std::string>("path");
+        std::vector<char> section_data;
+        try {
+          if (artifacts)
+            section_data = artifacts->get(section_path, paths);
+          else
+            throw error(error::error_code::invalid_input, "artifacts is null");
+        } catch (const std::runtime_error& e) {
+          throw error(error::error_code::invalid_input,
+                     "custom_section: error reading buffer from artifacts for \"" + section_path + "\": " + e.what());
+        }
+        custom_sections[section_name] = std::vector<uint8_t>(section_data.begin(), section_data.end());
+      }
+    }
+    return custom_sections;
+  }
+
 public:
   preprocessor_input() {}
   virtual ~preprocessor_input() = default;
@@ -68,7 +113,8 @@ public:
                         const std::vector<char>&,
                         const std::vector<std::string>&,
                         const std::vector<std::string>&,
-                        const std::map<uint32_t, std::vector<char> >& ctrlpkt) = 0;
+                        const std::map<uint32_t, std::vector<char> >& ctrlpkt,
+                        const file_artifact* /*resolver*/ = nullptr) = 0;
 
   const std::vector<std::string> get_keys()
   {

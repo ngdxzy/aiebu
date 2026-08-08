@@ -1,0 +1,171 @@
+// SPDX-License-Identifier: MIT
+// Copyright (C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
+
+#include "dtrace/action/action_control.h"
+#include <sstream>
+#include <stdexcept>
+
+namespace dtrace::action
+{
+
+//-------------------------read_handshake_action::read_handshake_action-------------------------//
+/**
+ * read_handshake_action() - Constructor with action token, probe type and probe name.
+ * It parses the token and extracts the result, action name and arguments.
+ *
+ * @param token
+ *  Read handshake action token: val = read_handshake(offset)
+ * @param probe_type
+ * @param probe_name
+ */
+read_handshake_action::
+read_handshake_action(std::string token, uint32_t probe_type, const std::string& probe_name)
+    : action(probe_type, probe_name)
+{
+    std::vector<std::string> fields;
+    std::stringstream token_stream(token);
+    std::string item;
+    while (std::getline(token_stream, item, '='))
+        fields.push_back(action::strip(item));
+
+    if (fields.size() != 2)
+        DTRACE_ERROR("DTRACE_ACTION_INVALID_TOKEN", 
+            "Invalid token: '" << token << "' Expected 'val = read_handshake(offset)'");
+
+    m_result = fields[0];
+
+    aiebu::smatch action;
+    if (!aiebu::regex_match(fields[1], action, action_name::action_regex))
+        DTRACE_ERROR("DTRACE_ACTION_INVALID_TOKEN", 
+            "Invalid token: '" << token << "' Expected 'read_handshake(offset)'");
+
+    m_action_name = action[1];
+    std::string argument_string = action[2]; 
+
+    // Validate and parse the length argument
+    std::stringstream argument_stream(argument_string);
+    while (std::getline(argument_stream, item, ','))
+        m_arguments.push_back(action::strip(item));
+
+    if (m_arguments.size() < 1)
+        DTRACE_ERROR("DTRACE_ACTION_INVALID_TOKEN_ARGUMENTS", 
+            "Invalid arguments: '" << token << "' read_handshake requires 1 argument (offset)");
+
+    // Validate the handshake offset
+    if (std::stoul(m_arguments[0], nullptr, dtrace::dtrace_ctrl::decimal_hexadecimal_base) % 4 != 0)
+        DTRACE_ERROR("DTRACE_ACTION_INVALID_TOKEN_ARGUMENTS", 
+            "Invalid arguments: '" << token << "' read_handshake offset must align 4-byte boundary");
+
+    // write handshake word offset
+    m_arguments[0] = std::to_string(
+        std::stoul(m_arguments[0], nullptr, dtrace::dtrace_ctrl::decimal_hexadecimal_base) >> 2
+    );
+}
+
+//-------------------------read_handshake_action::actionize-------------------------//
+/**
+ * actionize() - Adds read handshake action values to the control buffer.
+ *
+ * @param last 
+ *  Last action for the current probe.
+ * @param control_buffer 
+ * @param mem_buffer 
+ */
+void
+read_handshake_action::
+actionize(uint32_t last, std::vector<uint32_t>& control_buffer, std::vector<uint32_t>&)
+{
+    // control buffer
+    // read handshake action header
+    control_buffer.push_back(
+        (last << dtrace::dtrace_ctrl::second_byte_shift) | action_type::handshake_read
+    );
+    // read offset saved in decimal format
+    control_buffer.push_back(std::stoul(m_arguments[0]));
+    set_location(control_buffer, false);
+    // return value
+    control_buffer.push_back(dtrace::dtrace_ctrl::result_value_init);
+}
+
+//-------------------------read_handshake_action::serialize_helper-------------------------//
+/**
+ * serialize_helper() - Helper function to serialize action.
+ *
+ * @param result_buffer
+ * @param mapping
+ *
+ * @return 
+ *  The value from the result buffer based on the location mapping and
+ *  resets the value in the result buffer after serialization.
+ */
+uint32_t
+read_handshake_action::
+serialize_helper(uint32_t* result_buffer,
+    const std::unordered_map<uint32_t, uint32_t>& mapping) const
+{
+    uint32_t location = mapping.at(get_location(false));
+    uint32_t value = result_buffer[location];
+    // reset value after serialization
+    result_buffer[location] = dtrace::dtrace_ctrl::result_value_init;
+    if (value == dtrace::dtrace_ctrl::handshake_overflow)
+    {
+        std::stringstream handshake_offset;
+        handshake_offset << "0x" << std::hex << (std::stoul(m_arguments[0]) * sizeof(uint32_t));
+        DTRACE_WARNING("HANDSHAKE_OVERFLOW (" << handshake_offset.str() << ")");
+    }
+    return value;
+}
+
+//-------------------------read_handshake_action::serialize-------------------------//
+/**
+ * serialize() - Serializes the handshake read action into a string format.
+ *
+ * @param result_buffer
+ * @param mem_buffer
+ * @param mapping
+ * @param script_output
+ */
+void
+read_handshake_action::
+serialize(uint32_t* result_buffer, uint32_t*,
+    const std::unordered_map<uint32_t, uint32_t>& mapping, std::ostream& script_output) const
+{
+    uint32_t result = read_handshake_action::serialize_helper(result_buffer, mapping);
+    // Check if probe fired
+    if (result == dtrace::dtrace_ctrl::result_value_init) {
+        m_result_type = action_result_type::read_action_not_fired;
+        return;
+    }
+
+    // serialize string format
+    script_output << "  " << m_result << " = " << result << "\n";
+    m_result_type = action_result_type::read_action_fired;
+}
+
+//-------------------------read_handshake_action::serialize-------------------------//
+/**
+ * serialize() - Serializes the handshake read action into json format.
+ *
+ * @param result_buffer
+ * @param mem_buffer
+ * @param mapping
+ * @param json_output
+ */
+void
+read_handshake_action::
+serialize(uint32_t* result_buffer, uint32_t*,
+    const std::unordered_map<uint32_t, uint32_t>& mapping, json& json_output) const
+{
+    uint32_t result = read_handshake_action::serialize_helper(result_buffer, mapping);
+    // Check if probe fired
+    if (result == dtrace::dtrace_ctrl::result_value_init) {
+        m_result_type = action_result_type::read_action_not_fired;
+        return;
+    }
+
+    // serialize json format
+    json_output[m_probe_name][m_result] = result;
+    m_result_type = action_result_type::read_action_fired;
+}
+
+} // namespace dtrace::action

@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
-// Copyright (C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
 
 #include "dtrace/action/action_control.h"
+#include <iomanip>
 #include <sstream>
 #include <stdexcept>
 
@@ -21,16 +22,17 @@ namespace dtrace::action
  *  Memory buffer host address for read memory action in control buffer.
  */
 read_mem_action::
-read_mem_action(std::string token, uint32_t probe_type, const std::string& probe_name, 
-    uint64_t mem_host_addr)
+read_mem_action(std::string token, uint32_t probe_type, const std::string& probe_name, uint64_t mem_host_addr,
+    const std::unordered_map<std::string, std::pair<std::vector<uint32_t>, std::vector<uint32_t>>>& buffer_map)
     : action(probe_type, probe_name)
     , m_mem_host_addr(mem_host_addr)
+    , m_read_buffer_initialized(false)
 {
     std::vector<std::string> fields;
     std::stringstream token_stream(token);
     std::string item;
     while (std::getline(token_stream, item, '='))
-        fields.push_back(strip(item));
+        fields.push_back(action::strip(item));
 
     if (fields.size() != 2)
         DTRACE_ERROR("DTRACE_ACTION_INVALID_TOKEN", 
@@ -38,8 +40,8 @@ read_mem_action(std::string token, uint32_t probe_type, const std::string& probe
 
     m_result = fields[0];
 
-    boost::smatch action;
-    if (!boost::regex_match(fields[1], action, action_name::action_regex))
+    aiebu::smatch action;
+    if (!aiebu::regex_match(fields[1], action, action_name::action_regex))
         DTRACE_ERROR("DTRACE_ACTION_INVALID_TOKEN", 
             "Invalid token: '" << token << "' Expected 'read_mem(addr, length)'");
 
@@ -49,14 +51,30 @@ read_mem_action(std::string token, uint32_t probe_type, const std::string& probe
     // Validate and parse the length argument
     std::stringstream argument_stream(argument_string);
     while (std::getline(argument_stream, item, ','))
-        m_arguments.push_back(strip(item));
+        m_arguments.push_back(action::strip(item));
 
     if (m_arguments.size() < 2)
         DTRACE_ERROR("DTRACE_ACTION_INVALID_TOKEN_ARGUMENTS", 
             "Invalid arguments: '" << token << "' read_mem requires 2 arguments (addr, length)");
 
     // Parse the length string as hexadecimal or decimal
-    m_length = std::stoull(m_arguments[1], nullptr, 0);
+    m_length = static_cast<uint32_t>(std::stoull(m_arguments[1], nullptr, 0));
+
+    // check if write buffer name exists in the map and get the values
+    if (buffer_map.find(m_result) != buffer_map.end())
+    {
+        m_read_buffer_initialized = true;
+        m_read_buffer_addr = buffer_map.at(m_result).first;
+    }
+    else
+    {
+        m_read_buffer_addr.push_back(
+            (m_mem_host_addr >> dtrace::dtrace_ctrl::forth_byte_shift) & dtrace::dtrace_ctrl::mask_32
+        );
+        m_read_buffer_addr.push_back(
+            m_mem_host_addr & dtrace::dtrace_ctrl::mask_32
+        );
+    }
 }
 
 //-------------------------read_mem_action::get_mem_host_addr-------------------------//
@@ -69,14 +87,15 @@ read_mem_action(std::string token, uint32_t probe_type, const std::string& probe
  *
  * This function calculates the memory length by converting the second argument 
  * (action length) in `m_arguments` into word bytes. It then adds this memory length to the 
- * base memory host address (`m_mem_host_addr`) and returns the result.
+ * base memory host address (`m_mem_host_addr`) and returns the result. 
+ * If read buffer is already initialized, return base memory host address without adding memory length.
  */
 uint64_t
 read_mem_action::
 get_mem_host_addr() const
 {
-    uint64_t mem_length = static_cast<uint64_t>(m_length * dtrace::dtrace_ctrl::word_byte_size);
-    return m_mem_host_addr + mem_length;
+    auto mem_length = static_cast<uint64_t>(m_length) * dtrace::dtrace_ctrl::word_byte_size;
+    return m_read_buffer_initialized ? m_mem_host_addr : (m_mem_host_addr + mem_length);
 }
 
 //-------------------------read_mem_action::actionize-------------------------//
@@ -98,20 +117,44 @@ actionize(uint32_t last, std::vector<uint32_t>& control_buffer, std::vector<uint
     );
     set_location(control_buffer, false);
     // aie_addr
-    control_buffer.push_back(std::stoul(m_arguments[0], nullptr, 16));
+    control_buffer.push_back(std::stoul(m_arguments[0], nullptr, dtrace::dtrace_ctrl::hexadecimal_base));
     // length
     control_buffer.push_back(m_length);
     // mem_host_addr high
-    control_buffer.push_back(
-        (m_mem_host_addr >> dtrace::dtrace_ctrl::forth_byte_shift) & dtrace::dtrace_ctrl::mask_32
-    );
+    control_buffer.push_back(m_read_buffer_addr[0]);
     // mem_host_addr low
-    control_buffer.push_back(m_mem_host_addr & dtrace::dtrace_ctrl::mask_32);
+    control_buffer.push_back(m_read_buffer_addr[1]);
 
     // mem buffer
     set_location(mem_buffer, true);
     // values
-    mem_buffer.insert(mem_buffer.end(), m_length, 0);
+    if (!m_read_buffer_initialized)
+        mem_buffer.insert(mem_buffer.end(), m_length, dtrace::dtrace_ctrl::result_value_init);
+}
+
+//-------------------------read_mem_action::serialize_helper-------------------------//
+/**
+ * serialize_helper() - Helper function to serialize action.
+ *
+ * @param mem_buffer
+ *
+ * @return 
+ *  The value from the mem buffer based on the location mapping and
+ *  resets the value in the result buffer after serialization.
+ */
+std::vector<uint32_t>
+read_mem_action::
+serialize_helper(uint32_t* mem_buffer) const
+{
+    std::vector<uint32_t> result;
+    uint32_t index = get_location(true);
+    for (uint32_t i = index; i < index + m_length; ++i)
+    {        
+        result.push_back(mem_buffer[i]);
+        // reset value after serialization
+        mem_buffer[i] = dtrace::dtrace_ctrl::result_value_init;
+    }
+    return result;
 }
 
 //-------------------------read_mem_action::serialize-------------------------//
@@ -121,30 +164,74 @@ actionize(uint32_t last, std::vector<uint32_t>& control_buffer, std::vector<uint
  * @param result_buffer
  * @param mem_buffer
  * @param mapping
- *
- * @return 
- *  String representing the serialized read memory register action.
+ * @param script_output
  */
-std::string
+void
 read_mem_action::
-serialize(const std::vector<uint32_t>& result_buffer, const std::vector<uint32_t>& mem_buffer, 
-    const std::unordered_map<uint32_t, uint32_t>& mapping) const
+serialize(uint32_t*, uint32_t* mem_buffer,
+    const std::unordered_map<uint32_t, uint32_t>&, std::ostream& script_output) const
 {
-    std::ostringstream readable_result;
-    uint32_t index = get_location(true);
-    uint32_t aie_addr = result_buffer[mapping.at(get_location(false))];
-    uint32_t length = result_buffer[mapping.at(get_location(false) + 1)];
-    for (uint32_t i = index; i < index+length; ++i)
-    {
-        readable_result << "  0x" << std::hex << aie_addr
-            << ": 0x" << std::hex << mem_buffer[i];
-        if (i < index+length - 1)
-            readable_result << "\n";
-        aie_addr += dtrace::dtrace_ctrl::word_byte_size;
+    std::vector<uint32_t> result = read_mem_action::serialize_helper(mem_buffer);
+    // Check if probe fired
+    bool has_data = false;
+    for (uint32_t value : result) {
+        if (value != dtrace::dtrace_ctrl::result_value_init) {
+            has_data = true;
+            break;
+        }
     }
-    std::ostringstream output_action;
-    output_action << "  " << m_result << " = \"\"\"\n" << readable_result.str() << "\"\"\"\n";
-    return output_action.str();
+    if (!has_data) {
+        m_result_type = action_result_type::read_action_not_fired;
+        return;
+    }
+
+    // serialize string format
+    script_output << "  " << m_result << " = \"[";
+    for (uint32_t i = 0; i < result.size(); ++i)
+    {
+        script_output << "0x" << std::hex << std::setfill('0') << std::setw(8) << result[i] << std::dec;
+        if (i != result.size() - 1)
+            script_output << ", ";
+    }
+    script_output << "]\"\n";
+    m_result_type = action_result_type::read_action_fired;
+}
+
+//-------------------------read_mem_action::serialize-------------------------//
+/**
+ * serialize() - Serializes the read memory register action into json format.
+ *
+ * @param result_buffer
+ * @param mem_buffer
+ * @param mapping
+ * @param json_output
+ */
+void
+read_mem_action::
+serialize(uint32_t*, uint32_t* mem_buffer,
+    const std::unordered_map<uint32_t, uint32_t>&, json& json_output) const
+{
+    std::vector<uint32_t> result = read_mem_action::serialize_helper(mem_buffer);
+    // Check if probe fired
+    bool has_data = false;
+    for (uint32_t value : result) {
+        if (value != dtrace::dtrace_ctrl::result_value_init) {
+            has_data = true;
+            break;
+        }
+    }
+    if (!has_data) {
+        m_result_type = action_result_type::read_action_not_fired;
+        return;
+    }
+
+    // serialize json format
+    json json_result = json::array();
+    for (uint32_t i = 0; i < result.size(); ++i)
+        json_result.push_back(result[i]);
+
+    json_output[m_probe_name][m_result] = json_result;
+    m_result_type = action_result_type::read_action_fired;
 }
 
 } // namespace dtrace::action

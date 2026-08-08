@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# Copyright (C) 2024-2025, Advanced Micro Devices, Inc. All rights reserved.
+# Copyright (C) 2024-2026, Advanced Micro Devices, Inc. All rights reserved.
 
 # In arm compiler we dont have static libs so not building utility
 if (AIEBU_NATIVE_BUILD OR ${CMAKE_SYSTEM_PROCESSOR} STREQUAL ARM64)
@@ -18,13 +18,20 @@ add_library(aiebu_library_objects OBJECT
   common/writer.cpp
   common/assembler_state.cpp
   common/utils.cpp
+  common/build_info.cpp
   common/file_utils.cpp
   elf/elfwriter.cpp
+  elf/coredump_elfwriter.cpp
   preprocessor/aie2/aie2_blob_preprocessor_input.cpp
   preprocessor/aie2/aie2_asm_preprocessor_input.cpp
   preprocessor/asm/asm_parser.cpp
   ops/ops.cpp
   disassembler/disassembler.cpp
+  analyzer/transform_manager.cpp
+  common/${AIEBU_OS_SOURCE_DIR}/metrics.cpp
+  tools/debug_tools.cpp
+  tools/trace_probe.cpp
+  tools/opcode_information.cpp
   )
 
 # Remove globle includes in case of submodule XRT as there are conflicts
@@ -33,13 +40,13 @@ set_target_properties(aiebu_library_objects PROPERTIES
   INCLUDE_DIRECTORIES ""  # Clear inherited dirs
   )
 
+target_include_directories(aiebu_library_objects SYSTEM PRIVATE ${AIEBU_ELFIO_SRC_DIR})
 target_include_directories(aiebu_library_objects
   PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/include
   ${AIEBU_SOURCE_DIR}
-  ${AIEBU_ELFIO_SRC_DIR}
-  ${AIEBU_AIE-RT_HEADER_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/aie-rt/include
   ${AIEBU_BINARY_DIR}/${CMAKE_INSTALL_LIBDIR}
   ${Boost_INCLUDE_DIRS}
 
@@ -69,7 +76,7 @@ if (AIEBU_NATIVE_BUILD)
     AIEBU_NATIVE_BUILD=1
     )
 
-  add_dependencies(aiebu_library_objects ctrlcodelib)
+  #add_dependencies(aiebu_library_objects ctrlcodelib)
 endif()
 
 set_target_properties(aiebu_library_objects PROPERTIES
@@ -98,26 +105,33 @@ add_library(aiebu_static STATIC
   $<TARGET_OBJECTS:aiebu_library_objects>
   )
 
+target_include_directories(aiebu_static
+  PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+  )
+
 if (MSVC)
   target_link_libraries(aiebu_static advapi32)
 else()
-  # On linux use xrt_coreutil.a
+  # On linux use aiebu_static.a
   set_target_properties(aiebu_static PROPERTIES OUTPUT_NAME "aiebu")
 endif()
 
-install (TARGETS aiebu_static
-  EXPORT aiebu-targets
-  LIBRARY DESTINATION ${AIEBU_INSTALL_LIB_DIR} COMPONENT ${AIEBU_COMPONENT} NAMELINK_COMPONENT ${AIEBU_DEV_COMPONENT}
-  ARCHIVE DESTINATION ${AIEBU_INSTALL_LIB_DIR} COMPONENT ${AIEBU_DEV_COMPONENT}
-)
+# Enable install of static library iff requested
+if(AIEBU_INSTALL_STATIC_LIBRARY)
+  install (TARGETS aiebu_static
+    EXPORT aiebu-targets
+    ARCHIVE DESTINATION ${AIEBU_INSTALL_LIB_DIR} COMPONENT ${AIEBU_DEV_COMPONENT}
+  )
 
-install(FILES
-  include/aiebu/aiebu.h
-  include/aiebu/aiebu_assembler.h
-  include/aiebu/aiebu_error.h
-  DESTINATION ${AIEBU_INSTALL_INCLUDE_DIR}/aiebu
-  CONFIGURATIONS Debug Release COMPONENT ${AIEBU_DEV_COMPONENT}
-)
+  install(FILES
+    include/aiebu/aiebu.h
+    include/aiebu/aiebu_assembler.h
+    include/aiebu/aiebu_error.h
+    DESTINATION ${AIEBU_INSTALL_INCLUDE_DIR}/aiebu COMPONENT ${AIEBU_DEV_COMPONENT}
+  )
+endif()
 
 # Build dynamic tracing library
 add_subdirectory(dtrace)

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Copyright (C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
 
 #include "dtrace/action/action_control.h"
 #include <sstream>
@@ -50,18 +50,29 @@ actionize(uint32_t last, std::vector<uint32_t>& control_buffer, std::vector<uint
  * @param result_buffer
  * @param mem_buffer
  * @param mapping
- *
- * @return 
- *  String representing the serialized break action.
+ * @param script_output
  */
-std::string
+void
 break_action::
-serialize(const std::vector<uint32_t>&, const std::vector<uint32_t>&, 
-    const std::unordered_map<uint32_t, uint32_t>&) const
+serialize(uint32_t*, uint32_t*,
+    const std::unordered_map<uint32_t, uint32_t>&, std::ostream&) const
 {
-    std::ostringstream output_action;
-    output_action << "#" << " " << m_token << "\n";
-    return output_action.str();
+}
+
+//-------------------------break_action::serialize-------------------------//
+/**
+ * serialize() - Serializes the break action into json format.
+ *
+ * @param result_buffer
+ * @param mem_buffer
+ * @param mapping
+ * @param json_output
+ */
+void
+break_action::
+serialize(uint32_t*, uint32_t*,
+    const std::unordered_map<uint32_t, uint32_t>&, json&) const
+{
 }
 
 } // namespace dtrace::action

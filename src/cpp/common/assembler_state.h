@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Copyright (C) 2024-2025, Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (C) 2024-2026, Advanced Micro Devices, Inc. All rights reserved.
 
 #ifndef _AIEBU_COMMON_ASSEMBLER_STATE_H_
 #define _AIEBU_COMMON_ASSEMBLER_STATE_H_
@@ -15,6 +15,8 @@
 #include <memory>
 #include <map>
 #include <set>
+#include <functional>
+#include <unordered_map>
 
 namespace aiebu {
 
@@ -75,7 +77,7 @@ class label
   offset_type m_pos;
   uint32_t m_index;
   int32_t m_count = -1;
-  uint64_t m_size = 0;
+  offset_type m_size = 0;
   pageid_type m_pagenum;
 
 public:
@@ -90,12 +92,12 @@ public:
   }
 
   HEADER_ACCESS_GET_SET(pageid_type, pagenum);
-  HEADER_ACCESS_GET_SET(uint64_t, size);
+  HEADER_ACCESS_GET_SET(offset_type, size);
   HEADER_ACCESS_GET_SET(int32_t, count);
   HEADER_ACCESS_GET_SET(uint32_t, index);
   HEADER_ACCESS_GET_SET(offset_type, pos);
   const std::string& get_name() { return m_name; }
-  void increment_size(uint64_t size)
+  void increment_size(offset_type size)
   {
     m_size += size;
   }
@@ -113,9 +115,10 @@ protected:
   std::vector<std::string> m_labellist;
   std::map<std::string, std::vector<std::string>> m_dependent_labelmap;
   std::set<std::string> m_opt_opcodes;
+  bool m_is_save_restore_op = false;  // True when currently serializing a save/restore op
   inline std::string gen_label_name(bool makeunique, const std::shared_ptr<asm_data> data)
   {
-    return makeunique ? data->get_file() + ":" + data->get_operation()->get_name() : data->get_operation()->get_name();
+    return makeunique ? data->get_qualify_op_name() : data->get_operation().get_name();
   }
 
   inline std::string gen_eop_name(uint32_t eopnum)
@@ -141,10 +144,11 @@ protected:
                   std::vector<std::shared_ptr<asm_data>>& data,
                   std::map<std::string, std::shared_ptr<scratchpad_info>>& scratchpad,
                   std::map<std::string, uint32_t>& labelpageindex, std::map<uint32_t, std::string>& ctrlpkt_id_map,
-                  uint32_t optimize_level, bool makeunique);
+                  uint32_t optimize_level, bool makeunique, bool merged_ctrltext_elf);
   assembler_state(const assembler_state& rhs) = default;
-  assembler_state& operator=(const assembler_state& rhs) = default;
+  assembler_state& operator=(const assembler_state& rhs) = delete;
   assembler_state(assembler_state &&s) = default;
+
 public:
   std::shared_ptr<std::map<std::string, std::shared_ptr<isa_op>>> m_isa;
   std::vector<std::shared_ptr<asm_data>>& m_data;
@@ -157,14 +161,22 @@ public:
   std::map<std::string, std::vector<std::string>> m_patch;
   std::map<std::string, uint32_t>& m_labelpageindex;
   std::map<uint32_t, std::string>& m_ctrlpkt_id_map;
+  bool m_merged_ctrltext_elf = false;
 
   HEADER_ACCESS_GET_SET(offset_type, pos);
+  HEADER_ACCESS_GET_SET(bool, is_save_restore_op);
 
   void printstate() const;
 
-  inline std::string gen_job_name(bool makeunique, const std::shared_ptr<asm_data> data)
+  inline std::string gen_job_name(bool makeunique, const std::shared_ptr<asm_data> data, uint32_t eopnum)
   {
-    return makeunique ? data->get_file() + ":" + data->get_operation()->get_args()[0] : data->get_operation()->get_args()[0];
+    // Include eopnum in job name to allow same job ID across page boundaries in single file.
+    // This is needed to support disassembler, as it combines everything into one ASM file.
+    // Format: file:eopN:jobid (e.g., "default:eop0:0", "default:eop1:0")
+    if (makeunique)
+      return data->get_qualify_eop_name(eopnum);
+    else
+      return data->get_operation().get_args()[0];
   }
 
   bool is_number(const std::string& s) const {
@@ -176,7 +188,7 @@ public:
     return (m_scratchpad.find(label) != m_scratchpad.end());
   }
 
-  uint32_t parse_num_arg(const std::string& str);
+  uint32_t parse_num_arg(const std::string& str) const;
 
   void process(bool makeunique);
 
@@ -213,7 +225,7 @@ public:
 
   std::string get_label_at(size_t index) const
   {
-    if (index >  m_labellist.size())
+    if (index >=  m_labellist.size())
       throw error(error::error_code::internal_error, "index " + std::to_string(index) + " > label list size!!!");
     return "@" + m_labellist.at(index);
   }
@@ -226,9 +238,10 @@ public:
 
   void process_optimization(uint32_t optimize_level)
   {
-    if (optimize_level >= 1)
+    if (optimize_level >= 1) {
       m_opt_opcodes.insert("apply_offset_57");
-    else
+      m_opt_opcodes.insert("apply_offset_pl");
+    } else
       m_opt_opcodes.clear();
   }
 
@@ -237,9 +250,34 @@ public:
      return (m_opt_opcodes.count(name)> 0);
   }
 
+  bool merged_ctrltext_elf() const { return m_merged_ctrltext_elf; }
+
   virtual symbol::patch_schema get_shim_dma_patching() const = 0;
   virtual symbol::patch_schema get_control_packet_patching() const = 0;
   virtual ~assembler_state() = default;
+
+private:
+  const std::unordered_map<std::string, std::function<uint32_t(const std::string&)>> handlers = {
+    {"@", [this](const std::string& s) -> uint32_t {
+      //If string start with '@': it can be either pad name or label name
+      auto key = s.substr(1);
+      if (m_scratchpad.find(key) != m_scratchpad.end())
+        return m_scratchpad[key]->get_base() + m_scratchpad[key]->get_offset();
+      if (m_labelmap.find(key) != m_labelmap.end())
+        return m_labelmap[key]->get_pos();
+      throw error(error::error_code::invalid_asm, "Label " + key + " not present in label map\n");
+    }},
+    {"s2mm_", [this](const std::string& s) -> uint32_t { return get_actor(s); }},
+    {"mm2s_", [this](const std::string& s) -> uint32_t { return get_actor(s); }},
+    {"mem_s2mm_", [this](const std::string& s) -> uint32_t { return get_actor(s); }},
+    {"mem_mm2s_", [this](const std::string& s) -> uint32_t { return get_actor(s); }},
+    {"shim_s2mm_", [this](const std::string& s) -> uint32_t { return get_actor(s); }},
+    {"shim_mm2s_", [this](const std::string& s) -> uint32_t { return get_actor(s); }},
+    {"tile_s2mm_", [this](const std::string& s) -> uint32_t { return get_actor(s); }},
+    {"tile_mm2s_", [this](const std::string& s) -> uint32_t { return get_actor(s); }},
+    {"shim_ctrl_mm2s_", [this](const std::string& s) -> uint32_t { return get_actor(s); }}
+  };
+
 };
 
 
@@ -289,8 +327,9 @@ class assembler_state_aie2ps : public assembler_state
                          std::vector<std::shared_ptr<asm_data>>& data,
                          std::map<std::string, std::shared_ptr<scratchpad_info>>& scratchpad,
                          std::map<std::string, uint32_t>& labelpageindex, std::map<uint32_t, std::string>& ctrlpkt_id_map,
-                         uint32_t optimize_level, bool makeunique)
-                  : assembler_state(isa, data, scratchpad, labelpageindex, ctrlpkt_id_map, optimize_level, makeunique)
+                         uint32_t optimize_level, bool makeunique, bool merged_ctrltext_elf)
+                  : assembler_state(isa, data, scratchpad, labelpageindex, ctrlpkt_id_map, optimize_level, makeunique,
+                                    merged_ctrltext_elf)
   {
     //shim_dma_patching = symbol::patch_schema::shim_dma_57;
     //control_packet_patching = symbol::patch_schema::control_packet_57;
@@ -353,8 +392,9 @@ class assembler_state_aie4 : public assembler_state
                        std::vector<std::shared_ptr<asm_data>>& data,
                        std::map<std::string, std::shared_ptr<scratchpad_info>>& scratchpad,
                        std::map<std::string, uint32_t>& labelpageindex, std::map<uint32_t, std::string>& ctrlpkt_id_map,
-                       uint32_t optimize_level, bool makeunique)
-                  : assembler_state(isa, data, scratchpad, labelpageindex, ctrlpkt_id_map, optimize_level, makeunique)
+                       uint32_t optimize_level, bool makeunique, bool merged_ctrltext_elf)
+                  : assembler_state(isa, data, scratchpad, labelpageindex, ctrlpkt_id_map, optimize_level, makeunique,
+                                    merged_ctrltext_elf)
   {
     //shim_dma_patching = symbol::patch_schema::shim_dma_57_aie4;
     //control_packet_patching = symbol::patch_schema::control_packet_57_aie4;

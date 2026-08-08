@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Copyright (C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
 
 #include "dtrace/action/action_control.h"
 #include <sstream>
@@ -26,7 +26,7 @@ timestamp32_action(std::string token, uint32_t probe_type, const std::string& pr
     std::stringstream token_stream(token);
     std::string item;
     while (std::getline(token_stream, item, '='))
-        fields.push_back(strip(item));
+        fields.push_back(action::strip(item));
 
     if (fields.size() != 2)
         DTRACE_ERROR("DTRACE_ACTION_INVALID_TOKEN", 
@@ -34,8 +34,8 @@ timestamp32_action(std::string token, uint32_t probe_type, const std::string& pr
     
     m_result = fields[0];
 
-    boost::smatch action;
-    if (!boost::regex_match(fields[1], action, action_name::action_regex))
+    aiebu::smatch action;
+    if (!aiebu::regex_match(fields[1], action, action_name::action_regex))
         DTRACE_ERROR("DTRACE_ACTION_INVALID_TOKEN", 
             "Invalid token: '" << token << "' Expected 'timestamp32()'");
 
@@ -62,7 +62,30 @@ actionize(uint32_t last, std::vector<uint32_t>& control_buffer, std::vector<uint
     );
     set_location(control_buffer, false);
     // timestamp value
-    control_buffer.push_back(0);
+    control_buffer.push_back(dtrace::dtrace_ctrl::result_value_init);
+}
+
+//-------------------------timestamp32_action::serialize_helper-------------------------//
+/**
+ * serialize_helper() - Helper function to serialize action.
+ *
+ * @param result_buffer
+ * @param mapping
+ *
+ * @return 
+ *  The value from the result buffer based on the location mapping and
+ *  resets the value in the result buffer after serialization.
+ */
+uint32_t
+timestamp32_action::
+serialize_helper(uint32_t* result_buffer,
+    const std::unordered_map<uint32_t, uint32_t>& mapping) const
+{
+    uint32_t location = mapping.at(get_location(false));
+    uint32_t result = result_buffer[location];
+    // reset value after serialization
+    result_buffer[location] = dtrace::dtrace_ctrl::result_value_init;
+    return result;
 }
 
 //-------------------------timestamp32_action::serialize-------------------------//
@@ -72,18 +95,49 @@ actionize(uint32_t last, std::vector<uint32_t>& control_buffer, std::vector<uint
  * @param result_buffer
  * @param mem_buffer
  * @param mapping
- *
- * @return 
- *  String representing the serialized timestamp 32-bit action.
+ * @param script_output
  */
-std::string
+void
 timestamp32_action::
-serialize(const std::vector<uint32_t>& result_buffer, const std::vector<uint32_t>&, 
-    const std::unordered_map<uint32_t, uint32_t>& mapping) const
+serialize(uint32_t* result_buffer, uint32_t*,
+    const std::unordered_map<uint32_t, uint32_t>& mapping, std::ostream& script_output) const
 {
-    std::ostringstream output_action;
-    output_action << "  " << m_result << " = " << result_buffer[mapping.at(get_location(false))] << "\n";
-    return output_action.str();
+    uint32_t result = timestamp32_action::serialize_helper(result_buffer, mapping);
+    // Check if probe fired
+    if (result == dtrace::dtrace_ctrl::result_value_init) {
+        m_result_type = action_result_type::read_action_not_fired;
+        return;
+    }
+
+    // serialize string format
+    script_output << "  " << m_result << " = " << result << "\n";
+    m_result_type = action_result_type::read_action_fired;
+}
+
+//-------------------------timestamp32_action::serialize-------------------------//
+/**
+ * serialize() - Serializes the timestamp 32-bit action into json format.
+ *
+ * @param result_buffer
+ * @param mem_buffer
+ * @param mapping
+ * @param json_output
+ */
+void
+timestamp32_action::
+serialize(uint32_t* result_buffer, uint32_t*,
+    const std::unordered_map<uint32_t, uint32_t>& mapping, json& json_output) const
+{
+    uint32_t result = timestamp32_action::serialize_helper(result_buffer, mapping);
+    // Check if probe fired
+    if (result == dtrace::dtrace_ctrl::result_value_init) {
+        m_result_type = action_result_type::read_action_not_fired;
+        return;
+    }
+
+    // serialize json format
+    json_output[m_probe_name][m_result] = result;
+    m_result_type = action_result_type::read_action_fired;
 }
 
 } // namespace dtrace::action

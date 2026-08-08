@@ -1,19 +1,24 @@
 // SPDX-License-Identifier: MIT
-// Copyright (C) 2025 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 
 #include "file_utils.h"
 #include "aiebu/aiebu_assembler.h"
+#include "aie_elf_constants.h"
 #include "utils.h"
 #include "elfio/elfio.hpp"
+#include <cstring>
 #include <iostream>
+#include <map>
 
 namespace aiebu {
 
 constexpr unsigned int magic_length = 16;
 constexpr unsigned int elf_magic = 0x464c457f;
 
-// TODO: Add magic numbers for other AIE flavors
-constexpr unsigned int ctrlcode_magic_aie2 = 0x06040100;
+// optimized header major:1 minor:0 device:4(XAIE_DEV_GEN_AIE2P) row:6
+constexpr unsigned int ctrlcode_header_aie2_opt = 0x06040001;
+// non-optimized header major:0 minor:1 device:4(XAIE_DEV_GEN_AIE2P) row:6
+constexpr unsigned int ctrlcode_header_aie2 = 0x06040100;
 
 // https://github.com/Xilinx/bootgen/blob/master/bootheader-versal.cpp
 constexpr unsigned int pdi_magic0 = 0x000000dd;
@@ -24,14 +29,13 @@ constexpr unsigned int word_size = 4;
 // For AIE2 control packets are 8 words (8words * 4bytes/word = 32bytes) aligned
 constexpr unsigned int ctrlpkt_offset_aie2 = 8 * word_size;
 
-// ELF OS ABI values for AIE2 and AIE2PS
-constexpr unsigned int os_abi_aie2p = 69;
-constexpr unsigned int os_abi_aie2ps = 64;
-constexpr unsigned int os_abi_aie2ps_group = 70;
 // ELF header is at least 52 bytes for 32-bit, 64 bytes for 64-bit
 constexpr unsigned int min_elf_header_size = 52;
 // EI_OSABI is at offset 7 in the ELF header
 constexpr unsigned int elf_os_abi_offset = 7;
+// e_type is at offset 16 in the ELF header (uint16_t LE)
+constexpr unsigned int elf_e_type_offset = 16;
+constexpr unsigned int et_core = 4;  // ET_CORE — coredump ELF
 
 aiebu_assembler::buffer_type
 identify_buffer_type(const std::vector<char>& buffer)
@@ -44,35 +48,53 @@ identify_buffer_type(const std::vector<char>& buffer)
   }
 
   // Transaction ctrlcode header
-  if (data[0] == ctrlcode_magic_aie2)
+  if (data[0] == ctrlcode_header_aie2 || data[0] == ctrlcode_header_aie2_opt)
     return aiebu_assembler::buffer_type::blob_instr_transaction;
 
   // TODO: Put the reference to PDI format from bootgen
   if ((data[0] == pdi_magic0) && (data[1] == pdi_magic1))
     return aiebu_assembler::buffer_type::pdi_aie2;
 
-  // TODO: Put the reference to Packet Header and Control Packet here
-  // ctrlpkt identification is WIP
   return identify_control_packet(buffer.data(), buffer.size());
 }
 
 
+// OS/ABI → buffer_type lookup tables.  Adding a new architecture requires
+// only a new entry in the appropriate map.
+static const std::map<unsigned char, aiebu_assembler::buffer_type> coredump_abi_map = { // NOLINT(cert-err58-cpp)
+  {osabi_aie2p,  aiebu_assembler::buffer_type::coredump_aie2p},
+  {osabi_aie2ps, aiebu_assembler::buffer_type::coredump_aie2ps},
+  {osabi_aie4,   aiebu_assembler::buffer_type::coredump_aie4},
+  {osabi_aie4a,  aiebu_assembler::buffer_type::coredump_aie4a},
+  {osabi_aie4z,  aiebu_assembler::buffer_type::coredump_aie4z},
+};
+
+static const std::map<unsigned char, aiebu_assembler::buffer_type> elf_abi_map = { // NOLINT(cert-err58-cpp)
+  {osabi_aie2p,        aiebu_assembler::buffer_type::elf_aie2},
+  {osabi_aie2ps,       aiebu_assembler::buffer_type::elf_aie2ps},
+  {osabi_aie2ps_group, aiebu_assembler::buffer_type::elf_aie2ps},  // legacy group variant
+  {osabi_aie4,         aiebu_assembler::buffer_type::elf_aie4},
+  {osabi_aie4a,        aiebu_assembler::buffer_type::elf_aie4a},
+  {osabi_aie4z,        aiebu_assembler::buffer_type::elf_aie4z},
+};
+
 aiebu_assembler::buffer_type
 identify_elf_type(const std::vector<char>& buffer)
 {
-  // ELF header is at least 52 bytes for 32-bit, 64 bytes for 64-bit
-  if (buffer.size() >= min_elf_header_size) {
-    // EI_OSABI is at offset 7 in the ELF header
-    const auto os_abi = static_cast<unsigned char>(buffer.data()[elf_os_abi_offset]);
-    if (os_abi == os_abi_aie2p)
-      return aiebu_assembler::buffer_type::elf_aie2;
-    else if (os_abi == os_abi_aie2ps || os_abi == os_abi_aie2ps_group)
-      return aiebu_assembler::buffer_type::elf_aie2ps;
-    else
-      return aiebu_assembler::buffer_type::unspecified;
-  }
-  else
+  if (buffer.size() < min_elf_header_size)
     throw error(error::error_code::invalid_elf, "ELF header size is less than expected");
+
+  const auto os_abi = static_cast<unsigned char>(buffer.data()[elf_os_abi_offset]);
+
+  // e_type is a uint16_t at offset 16; read it as LE (AIE ELFs are always LE).
+  uint16_t e_type = 0;
+  std::memcpy(&e_type, buffer.data() + elf_e_type_offset, sizeof(e_type));
+
+  const auto& abi_map = (e_type == et_core) ? coredump_abi_map : elf_abi_map;
+  const auto  it      = abi_map.find(os_abi);
+  if (it != abi_map.end())
+    return it->second;
+  return aiebu_assembler::buffer_type::unspecified;
 }
 
 

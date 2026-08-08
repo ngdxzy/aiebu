@@ -1,65 +1,89 @@
 # SPDX-License-Identifier: MIT
-# Copyright (C) 2025 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright (C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 
 project(dtrace_test)
 
 set(DTRACE_TESTNAME "dtrace_test")
-set(DTRACE_SOURCE_DIR "${AIEBU_BINARY_DIR}/src/cpp/dtrace")
 
 add_executable(${DTRACE_TESTNAME} dtrace_test.cpp)
+add_dependencies(${DTRACE_TESTNAME} cert_dtrace_static)
+target_link_libraries(${DTRACE_TESTNAME} PRIVATE cert_dtrace_static)
+target_include_directories(${DTRACE_TESTNAME} PRIVATE ${AIEBU_SOURCE_DIR}/src/cpp)
 
-add_dependencies(${DTRACE_TESTNAME} cert_dtrace)
-
-if (MSVC)
-  set(DTRACE_LIBRARY_PATH "${DTRACE_SOURCE_DIR}/$<CONFIG>/cert_dtrace.dll")
-else()
-  set(DTRACE_LIBRARY_PATH "${DTRACE_SOURCE_DIR}/libcert_dtrace.so")
-endif()
-
-add_custom_command(OUTPUT control_buffer_single.dat
-  COMMAND ${DTRACE_TESTNAME} "${DTRACE_LIBRARY_PATH}" "${AIEBU_SOURCE_DIR}/test/dtrace_test/single_col" "control_buffer_single.dat"
-  DEPENDS "${DTRACE_TESTNAME}"
-  COMMENT "Control block for single column dtrace test"
+# Test single uc script
+add_test(NAME "dtrace_single_column"
+  COMMAND ${DTRACE_TESTNAME} "${AIEBU_SOURCE_DIR}/test/dtrace_test/single_col" "${CMAKE_CURRENT_BINARY_DIR}/control_buffer_single.dat" "python"
   WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
   )
 
-add_custom_target(dtracesinglecolumn ALL
-  DEPENDS control_buffer_single.dat
-  )
-
-add_test(NAME "dtrace_single_column"
+add_test(NAME "dtrace_single_column_md5sum"
   COMMAND cmake -P "${AIEBU_SOURCE_DIR}/cmake/md5sum-compare.cmake" "${CMAKE_CURRENT_BINARY_DIR}/control_buffer_single.dat" "${AIEBU_SOURCE_DIR}/test/dtrace_test/single_col/gold.md5"
   WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
   )
+set_tests_properties("dtrace_single_column_md5sum" PROPERTIES DEPENDS "dtrace_single_column")
 
-add_custom_command(OUTPUT control_buffer_multi.dat
-  COMMAND ${DTRACE_TESTNAME} "${DTRACE_LIBRARY_PATH}" "${AIEBU_SOURCE_DIR}/test/dtrace_test/multi_col" "control_buffer_multi.dat"
-  DEPENDS "${DTRACE_TESTNAME}"
-  COMMENT "Control block for multi column dtrace test"
+add_test(NAME "dtrace_single_column_result_md5sum"
+  COMMAND ${CMAKE_COMMAND} -E compare_files --ignore-eol 
+  "${CMAKE_CURRENT_BINARY_DIR}/control_buffer_single.py"
+  "${CMAKE_CURRENT_SOURCE_DIR}/single_col/gold_result.py"
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+  )
+set_tests_properties("dtrace_single_column_result_md5sum" PROPERTIES DEPENDS "dtrace_single_column")
+
+# Test multi uc script and multi page control block
+add_test(NAME "dtrace_multi_column"
+  COMMAND ${DTRACE_TESTNAME} "${AIEBU_SOURCE_DIR}/test/dtrace_test/multi_col" "${CMAKE_CURRENT_BINARY_DIR}/control_buffer_multi.dat" "json"
   WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
   )
 
-add_custom_target(dtracemulticolumn ALL
-  DEPENDS control_buffer_multi.dat
-  )
-
-add_test(NAME "dtrace_multi_column"
+add_test(NAME "dtrace_multi_column_md5sum"
   COMMAND cmake -P "${AIEBU_SOURCE_DIR}/cmake/md5sum-compare.cmake" "${CMAKE_CURRENT_BINARY_DIR}/control_buffer_multi.dat" "${AIEBU_SOURCE_DIR}/test/dtrace_test/multi_col/gold.md5"
   WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
   )
+set_tests_properties("dtrace_multi_column_md5sum" PROPERTIES DEPENDS "dtrace_multi_column")
 
-add_custom_command(OUTPUT control_buffer_profile.dat
-  COMMAND ${DTRACE_TESTNAME} "${DTRACE_LIBRARY_PATH}" "${AIEBU_SOURCE_DIR}/test/dtrace_test/profile" "control_buffer_profile.dat"
-  DEPENDS "${DTRACE_TESTNAME}"
-  COMMENT "Control block for profile dtrace test"
+add_test(NAME "dtrace_multi_column_result_md5sum"
+  COMMAND ${CMAKE_COMMAND} -E compare_files --ignore-eol 
+  "${CMAKE_CURRENT_BINARY_DIR}/control_buffer_multi.json"
+  "${CMAKE_CURRENT_SOURCE_DIR}/multi_col/gold_result.json"
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+  )
+set_tests_properties("dtrace_multi_column_result_md5sum" PROPERTIES DEPENDS "dtrace_multi_column")
+
+# Test profile script
+add_test(NAME "dtrace_profile"
+  COMMAND ${DTRACE_TESTNAME} "${AIEBU_SOURCE_DIR}/test/dtrace_test/profile" "${CMAKE_CURRENT_BINARY_DIR}/control_buffer_profile.dat"
   WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
   )
 
-add_custom_target(dtracprofile ALL
-  DEPENDS control_buffer_profile.dat
-  )
-
-add_test(NAME "dtrace_profile"
+add_test(NAME "dtrace_profile_md5sum"
   COMMAND cmake -P "${AIEBU_SOURCE_DIR}/cmake/md5sum-compare.cmake" "${CMAKE_CURRENT_BINARY_DIR}/control_buffer_profile.dat" "${AIEBU_SOURCE_DIR}/test/dtrace_test/profile/gold.md5"
   WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
   )
+set_tests_properties("dtrace_profile_md5sum" PROPERTIES DEPENDS "dtrace_profile")
+
+# Test duplicate filename script
+add_test(NAME "dtrace_duplicate_filename"
+  COMMAND ${DTRACE_TESTNAME} "${AIEBU_SOURCE_DIR}/test/dtrace_test/duplicate_filename" "${CMAKE_CURRENT_BINARY_DIR}/control_buffer_duplicate_filename.dat"
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+  )
+
+add_test(NAME "dtrace_duplicate_filename_md5sum"
+  COMMAND cmake -P "${AIEBU_SOURCE_DIR}/cmake/md5sum-compare.cmake" "${CMAKE_CURRENT_BINARY_DIR}/control_buffer_duplicate_filename.dat" "${AIEBU_SOURCE_DIR}/test/dtrace_test/duplicate_filename/gold.md5"
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+  )
+set_tests_properties("dtrace_duplicate_filename_md5sum" PROPERTIES DEPENDS "dtrace_duplicate_filename")
+
+# Test empty elf dump section
+add_test(NAME "dtrace_empty_elf_dump"
+  COMMAND ${DTRACE_TESTNAME} "${AIEBU_SOURCE_DIR}/test/dtrace_test/empty_elf_dump" "${CMAKE_CURRENT_BINARY_DIR}/control_empty_elf_dump.dat"
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+  )
+
+add_test(NAME "dtrace_empty_elf_dump_md5sum"
+  COMMAND cmake -P "${AIEBU_SOURCE_DIR}/cmake/md5sum-compare.cmake" "${CMAKE_CURRENT_BINARY_DIR}/control_empty_elf_dump.dat" "${AIEBU_SOURCE_DIR}/test/dtrace_test/empty_elf_dump/gold.md5"
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+  )
+set_tests_properties("dtrace_empty_elf_dump_md5sum" PROPERTIES DEPENDS "dtrace_empty_elf_dump")
+
+add_subdirectory(duplicate_filename)

@@ -137,11 +137,15 @@ public:
   }
 
   uint16_t read_uint16(const char* data) {
-    return static_cast<uint16_t>(data[0] | (data[1] << byte_shift_8));
+    return static_cast<uint16_t>(static_cast<uint8_t>(data[0])) | 
+           (static_cast<uint16_t>(static_cast<uint8_t>(data[1])) << byte_shift_8);
   }
 
   uint32_t read_uint32(const char* data) {
-    return static_cast<uint32_t>(data[0] | (data[1] << byte_shift_8) | (data[2] << byte_shift_16) | (data[3] << byte_shift_24));
+    return static_cast<uint32_t>(static_cast<uint8_t>(data[0])) | 
+           (static_cast<uint32_t>(static_cast<uint8_t>(data[1])) << byte_shift_8) | 
+           (static_cast<uint32_t>(static_cast<uint8_t>(data[2])) << byte_shift_16) | 
+           (static_cast<uint32_t>(static_cast<uint8_t>(data[3])) << byte_shift_24);
   }
 
   uint32_t get_arg_val(const char* data, uint32_t len) {
@@ -272,6 +276,11 @@ public:
     else
       return std::make_shared<isa_op_serializer>(get_shared_ptr(), args);
   }
+
+  // Same result as serializer(args)->size(state) without copying args or heap
+  // allocating a serializer (hot path in assembler_state::process).
+  offset_type encoded_size_in_text(assembler_state& state,
+                                   const std::vector<std::string>& args) const;
 };
 
   inline std::unique_ptr<op_deserializer> isa_op_disasm::create_deserializer() const

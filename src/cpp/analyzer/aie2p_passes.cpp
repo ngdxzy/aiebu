@@ -6,7 +6,8 @@
 #include "aie2p_passes.h"
 #include "utils.h"
 
-#include "xaiengine.h"
+#include <xaiengine/xaiegbl.h>
+#include <xaiengine/xaie_txn.h>
 
 namespace aiebu {
 
@@ -227,9 +228,15 @@ void XAie_OpHdr_drop_preempt::transform() {
       it->m_state = basic_node_state::dropped;
       size_t original_offset = it->m_original_offset;
       it = m_nodes.erase(it);
-      auto noop = allocXaie<XAie_NoOpHdr>();
+      // XAie_NoOpHdr is a 4-byte wire-format header and does not contain an
+      // XAie_OpHdr subobject. We treat node headers as raw bytes and only use
+      // the first byte (Op) for dispatch; cast via void* to avoid CodeQL's
+      // type-confusion warning while preserving the 4-byte encoding.
+      // Allocate XAie_OpHdr (not XAie_NoOpHdr) so m_op has the correct static type;
+      // sizeof(XAie_NoOpHdr) is passed as m_size to preserve the 4-byte wire encoding.
+      auto noop = allocXaie<XAie_OpHdr>();
       noop->Op = XAIE_IO_NOOP;
-      m_nodes.emplace(it, reinterpret_cast<const XAie_OpHdr *>(noop),
+      m_nodes.emplace(it, noop,
                       sizeof(XAie_NoOpHdr), original_offset, basic_node_state::added);
       break;
     }
@@ -243,7 +250,7 @@ void XAie_OpHdr_add_loadpdi::transform() {
   auto load = allocXaie<XAie_LoadPdiHdr>();
   load->Op = XAIE_IO_LOADPDI;
   load->PdiId = m_pdiid;
-  load->PdiSize = m_pdisize;
+  load->PdiSize = static_cast<uint32_t>(m_pdisize);
   auto it = m_nodes.begin();
   size_t original_offset = it->m_original_offset;
   m_nodes.emplace(it, reinterpret_cast<const XAie_OpHdr *>(load),

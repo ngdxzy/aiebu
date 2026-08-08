@@ -4,13 +4,11 @@
 #include <filesystem>
 #include "file_utils.h"
 #include "aie2_blob_preprocessor_input.h"
-#include "xaiengine.h"
+#include "logger.h"
+#include <xaiengine/xaiegbl.h>
+#include <xaiengine/xaie_txn.h>
 
-# if defined (AIEBU_NATIVE_BUILD)
-#include "stx_save_restore_map.h"
-#else
 #include "stx_save_restore_map_prebuilt.h"
-#endif
 
 namespace aiebu {
 
@@ -18,18 +16,17 @@ void
 aie2_blob_preprocessor_input::
 add_preemption_code(uint32_t col)
 {
-  auto& stx_save_restore_map = get_stx_save_restore();
-  if (stx_save_restore_map.count(col) == 0)
+  const auto* save_restore = get_stx_save_restore(col);
+  if (!save_restore)
   {
     auto error_msg = boost::format("Preemption save/restore code for not available for txn buffer with col:(%d)\n") % col;
     throw error(error::error_code::invalid_asm, error_msg.str());
   }
-  // std::cout << "Save/Restore preemption code added for col" << col << "\n";
-  m_data[preempt_save].resize(stx_save_restore_map.at(col).first.size());
-  std::memcpy(m_data[preempt_save].data(), stx_save_restore_map.at(col).first.data(), stx_save_restore_map.at(col).first.size());
-
-  m_data[preempt_restore].resize(stx_save_restore_map.at(col).second.size());
-  std::memcpy(m_data[preempt_restore].data(), stx_save_restore_map.at(col).second.data(), stx_save_restore_map.at(col).second.size());
+  log_info() << "Save/Restore preemption code added for col " << col << "\n";
+  m_data[preempt_save].assign(save_restore->save.data,
+                              save_restore->save.data + save_restore->save.size);
+  m_data[preempt_restore].assign(save_restore->restore.data,
+                                 save_restore->restore.data + save_restore->restore.size);
 
   extractSymbolFromBuffer(m_data[preempt_save], preempt_save, scratch_pad);
   extractSymbolFromBuffer(m_data[preempt_restore], preempt_restore, scratch_pad);
@@ -231,7 +228,9 @@ add_preemption_code(uint32_t col)
                                uint32_t arg_index,
                                const boost::property_tree::ptree& pt)
   {
-    const uint32_t addend = get_32_bit_property(pt, "offset_in_bytes", true);
+    const uint64_t addend_64 = pt.get<uint64_t>("offset_in_bytes", 0);
+    const bool large_addend = addend_64 > RANGE_32BIT;
+    const uint32_t addend = large_addend ? 0 : static_cast<uint32_t>(addend_64);
     const auto control_packet_patch_pt = pt.get_child_optional("control_packet_patch_locations");
     if (!control_packet_patch_pt)
       return;
@@ -241,12 +240,17 @@ add_preemption_code(uint32_t col)
       auto patch = pat.second;
       if (m_data.find(ctrl_data) == m_data.end())
         throw error(error::error_code::invalid_asm, "control packet not present");
-      uint32_t control_packet_size = m_data[ctrl_data].size();
+      auto control_packet_size = static_cast<uint32_t>(m_data[ctrl_data].size());
       uint32_t control_packet_offset = get_32_bit_property(patch, "offset");
       // Check if the control packet offset is within the control packet size
       validate_json(control_packet_offset, control_packet_size, arg_index, offset_type::CONTROL_PACKET);
       // move 8 bytes(header) up for unifying the patching scheme between DPU sequence and transaction-buffer
       uint32_t offset = control_packet_offset - 8;
+      if (large_addend)
+      {
+        log_info() << boost::format("Warning: offset_in_bytes (0x%x) > 32bit for control_packet_48, baking into BD and patching with addend=0\n") % addend_64;
+        patch_ctrl48_addend(m_data[ctrl_data], offset, addend_64);
+      }
       add_symbol({name, offset, 0, 0, addend, 0, ctrl_data, symbol::patch_schema::control_packet_48});
     }
   }
@@ -309,13 +313,20 @@ add_preemption_code(uint32_t col)
     {
       auto patch = pat.second;
       uint32_t control_packet_offset = get_32_bit_property(patch, "offset");
-      uint32_t control_packet_size = m_data[".ctrldata"].size();
+      uint32_t control_packet_size = static_cast<uint32_t>(m_data[".ctrldata"].size());
       uint32_t arg_index = get_32_bit_property(patch, "xrt_arg_idx");
       // check if the offset is less than the size of the control packet
       validate_json(control_packet_offset, control_packet_size, arg_index, offset_type::CONTROL_PACKET);
       // move 8 bytes(header) up for unifying the patching scheme between DPU sequence and transaction-buffer
       uint32_t offset = control_packet_offset - 8;
-      const uint32_t addend = get_32_bit_property(patch, "bo_offset");
+      const uint64_t addend_64 = patch.get<uint64_t>("bo_offset", 0);
+      const bool large_addend = addend_64 > RANGE_32BIT;
+      const uint32_t addend = large_addend ? 0 : static_cast<uint32_t>(addend_64);
+      if (large_addend)
+      {
+        log_info() << boost::format("Warning: bo_offset (0x%x) > 32bit for control_packet_48, baking into BD and patching with addend=0\n") % addend_64;
+        patch_ctrl48_addend(m_data[ctrl_data], offset, addend_64);
+      }
       add_symbol({std::to_string(arg_index + arg_offset), offset, 0, 0, addend, 0, ctrl_data, symbol::patch_schema::control_packet_48});
     }
 
@@ -371,6 +382,8 @@ add_preemption_code(uint32_t col)
   {
     constexpr static uint32_t DMA_BD_1_IN_BYTES = 1 * 4;
     constexpr static uint32_t DMA_BD_2_IN_BYTES = 2 * 4;
+    if (offset >= mc_code.size() || mc_code.size() - offset <= DMA_BD_2_IN_BYTES + 1)
+      throw error(error::error_code::invalid_asm, "shimBD offset OOB");
     //Clearing address bits as they are set at runtime during patching(xrt/firmware).
     //Lower Base Address. 30 LSB of a 46-bit long 32-bit-word-address. (bits [31:2] in DMA_BD_1 of a 48-bit byte-address)
     //Upper Base Address. 16 MSB of a 46-bit long 32-bit-word-address. (bits [47:32] in DMA_BD_2 of a 48-bit byte-address)
@@ -380,6 +393,36 @@ add_preemption_code(uint32_t col)
     mc_code[offset + DMA_BD_1_IN_BYTES + 3] = mc_code[offset + DMA_BD_1_IN_BYTES + 3] & (0x00);
     mc_code[offset + DMA_BD_2_IN_BYTES] = mc_code[offset + DMA_BD_2_IN_BYTES] & (0x00);
     mc_code[offset + DMA_BD_2_IN_BYTES + 1] = mc_code[offset + DMA_BD_2_IN_BYTES + 1] & (0x00);
+  }
+
+  // Patch a >32bit addend into the shim BD bytes (bd_data_ptr[1] and bd_data_ptr[2]).
+  void
+  aie2_blob_preprocessor_input::
+  patch_shim48_addend(std::vector<char>& mc_code, uint32_t offset, uint64_t addend) const
+  {
+    uint32_t* bd_data_ptr = reinterpret_cast<uint32_t*>(mc_code.data() + offset);
+    const uint32_t bd1_low_bits = bd_data_ptr[1] & 0x3;
+    uint64_t base_address =
+      ((static_cast<uint64_t>(bd_data_ptr[2]) & 0xFFFF) << 32) |
+      (static_cast<uint64_t>(bd_data_ptr[1]) & 0xFFFFFFFC);
+    base_address += addend;
+    bd_data_ptr[1] = bd1_low_bits | static_cast<uint32_t>(base_address & 0xFFFFFFFC);
+    bd_data_ptr[2] = (bd_data_ptr[2] & 0xFFFF0000) | static_cast<uint32_t>((base_address >> 32) & 0xFFFF);
+  }
+
+  // Patch a >32bit addend into the control packet BD bytes (bd_data_ptr[2] and bd_data_ptr[3]).
+  void
+  aie2_blob_preprocessor_input::
+  patch_ctrl48_addend(std::vector<char>& buf, uint32_t offset, uint64_t addend) const
+  {
+    uint32_t* bd_data_ptr = reinterpret_cast<uint32_t*>(buf.data() + offset);
+    const uint32_t bd2_low_bits = bd_data_ptr[2] & 0x3;
+    uint64_t base_address =
+      ((static_cast<uint64_t>(bd_data_ptr[3]) & 0xFFFF) << 32) |
+      (static_cast<uint64_t>(bd_data_ptr[2]) & 0xFFFFFFFC);
+    base_address += addend;
+    bd_data_ptr[2] = bd2_low_bits | static_cast<uint32_t>(base_address & 0xFFFFFFFC);
+    bd_data_ptr[3] = (bd_data_ptr[3] & 0xFFFFF000) | static_cast<uint32_t>((base_address >> 32) & 0xFFFF);
   }
 
   #define MAJOR_VER 1
@@ -392,6 +435,7 @@ add_preemption_code(uint32_t col)
     uint32_t loadsequence = 0;
     bool pm_exist = false;
     uint32_t pm_id = 0;
+    const char *mc_code_end = &mc_code.back();
 
     ptr += sizeof(XAie_TxnHeader);
     for(uint32_t num = 0; num < txn_header->NumOps; num++) {
@@ -405,7 +449,10 @@ add_preemption_code(uint32_t col)
         case XAIE_IO_BLOCKWRITE: {
           auto bw_header = reinterpret_cast<const XAie_BlockWrite32Hdr *>(ptr);
           auto payload = reinterpret_cast<const char*>(ptr + sizeof(XAie_BlockWrite32Hdr));
-          auto offset = static_cast<uint32_t>(payload-mc_code.data());
+          auto offset = static_cast<uint32_t>(payload - mc_code.data());
+          if (bw_header->Size < sizeof(*bw_header) ||
+              bw_header->Size > static_cast<size_t>(mc_code_end - reinterpret_cast<const char*>(bw_header)))
+            throw error(error::error_code::invalid_asm, "BLOCKWRITE size out of range");
           uint32_t size = (bw_header->Size - sizeof(*bw_header));
           if (loadsequence > 0 && pm_exist)
           {
@@ -498,8 +545,8 @@ add_preemption_code(uint32_t col)
           if (std::find(pm_id_list.begin(), pm_id_list.end(), pm_id) == pm_id_list.end())
           {
             pm_exist = false;
-            std::cout << "PM id:" << std::hex << pm_id << std::dec
-                      << " has no corresponding pm control packet given by user!!!\n";
+            log_info() << "PM id:" << std::hex << pm_id << std::dec
+                       << " has no corresponding pm control packet given by user!!!\n";
           }
           ptr += sizeof(XAie_PmLoadHdr);
           break;
@@ -565,6 +612,7 @@ add_preemption_code(uint32_t col)
     uint32_t loadsequence = 0;
     bool pm_exist = false;
     uint32_t pm_id = 0;
+    const char *mc_code_end = &mc_code.back();
 
     ptr += sizeof(XAie_TxnHeader);
     for(uint32_t num = 0; num < txn_header->NumOps; num++) {
@@ -577,7 +625,10 @@ add_preemption_code(uint32_t col)
         case XAIE_IO_BLOCKWRITE: {
           auto bw_header = reinterpret_cast<const XAie_BlockWrite32Hdr_opt *>(ptr);
           auto payload = reinterpret_cast<const char*>(ptr + sizeof(XAie_BlockWrite32Hdr_opt));
-          auto offset = static_cast<uint32_t>(payload-mc_code.data());
+          auto offset = static_cast<uint32_t>(payload - mc_code.data());
+          if (bw_header->Size < sizeof(*bw_header) ||
+              bw_header->Size > static_cast<size_t>(mc_code_end - reinterpret_cast<const char*>(bw_header)))
+            throw error(error::error_code::invalid_asm, "BLOCKWRITE size out of range");
           uint32_t size = (bw_header->Size - sizeof(*bw_header));
           if (loadsequence > 0 && pm_exist)
           {
@@ -666,8 +717,8 @@ add_preemption_code(uint32_t col)
           if (std::find(pm_id_list.begin(), pm_id_list.end(), pm_id) == pm_id_list.end())
           {
             pm_exist = false;
-            std::cout << "PM id:" << std::hex << pm_id << std::dec
-                      << " has no corresponding pm control packet given by user!!!\n";
+            log_info() << "PM id:" << std::hex << pm_id << std::dec
+                       << " has no corresponding pm control packet given by user!!!\n";
           }
           ptr += sizeof(XAie_PmLoadHdr);
           break;
@@ -682,7 +733,7 @@ add_preemption_code(uint32_t col)
           if (loadsequence && pm_exist)
             throw error(error::error_code::invalid_asm, "Patch opcode found in PM Load Sequence!!!");
           auto op = reinterpret_cast<const patch_op_opt_t *>(ptr + sizeof(*hdr));
-          uint64_t reg = op->regaddr & 0xFFFFFFF0; // regaddr point either to 1st word or 2nd word of BD
+          auto reg = static_cast<uint32_t>(op->regaddr & 0xFFFFFFF0); // regaddr point either to 1st word or 2nd word of BD
           auto it = blockWriteRegOffsetMap.find(reg);
           if ( it == blockWriteRegOffsetMap.end()) {
             auto error_msg = boost::format("Invalid Control Code. No block-write opcode"
@@ -731,22 +782,27 @@ add_preemption_code(uint32_t col)
       std::cout << "txn buffer is empty\n";
       return 0;
     }
+
+    if (mc_code.size() < sizeof(XAie_TxnHeader))
+      throw error(error::error_code::invalid_asm,
+                  "txn buffer smaller than header");
+
     const char *ptr = (mc_code.data());
     auto txn_header = reinterpret_cast<const XAie_TxnHeader *>(ptr);
 
-    // printf("Header version %d.%d\n", txn_header->Major, txn_header->Minor);
-    // printf("Device Generation: %d\n", txn_header->DevGen);
-    // printf("Cols, Rows, NumMemRows : (%d, %d, %d)\n", txn_header->NumCols,
-    //      txn_header->NumRows, txn_header->NumMemTileRows);
-    // printf("TransactionSize: %u\n", txn_header->TxnSize);
-    // printf("NumOps: %u\n", txn_header->NumOps);
+    log_info() << "Header version " << (int)txn_header->Major << "." << (int)txn_header->Minor << "\n";
+    log_info() << "Device Generation: " << (int)txn_header->DevGen << "\n";
+    log_info() << "Cols, Rows, NumMemRows : (" << (int)txn_header->NumCols << ","
+               << (int)txn_header->NumRows << "," << (int)txn_header->NumMemTileRows << ")" << "\n";
+    log_info() << "TransactionSize: " << txn_header->TxnSize << "\n";
+    log_info() << "NumOps: " << txn_header->NumOps << "\n";
 
     /**
      * Check if Header Version is 1.0 then call optimized API else continue with this
      * function to service the TXN buffer.
      */
     if ((txn_header->Major == MAJOR_VER) && (txn_header->Minor == MINOR_VER)) {
-        // printf("Optimized HEADER version detected \n");
+        log_info() << "Optimized HEADER version detected\n";
         return process_txn_opt(ptr, mc_code, section_name, argname);
     }
     return process_txn(ptr, mc_code, section_name, argname);
@@ -764,18 +820,15 @@ add_preemption_code(uint32_t col)
     uint32_t offset = input.offset;
     uint64_t buffer_length_in_bytes = input.buffer_length_in_bytes;
 
-    if (input.addend > RANGE_32BIT)
-    {
-      auto error_msg = boost::format("Invalid addend (0x%x) > 32bit found") % input.addend;
-      throw error(error::error_code::invalid_asm, error_msg.str());
-    }
-    uint32_t addend = static_cast<uint32_t>(input.addend);
-
     if (argidx > (MAX_ARG_INDEX + arg_offset))
     {
       auto error_msg = boost::format("Arg index: %d in patch opcode > 32") % argidx;
       throw error(error::error_code::invalid_asm, error_msg.str());
     }
+
+    const bool large_addend = input.addend > RANGE_32BIT;
+    uint32_t addend = large_addend ? 0 : static_cast<uint32_t>(input.addend);
+
     std::vector<uint32_t> MEM_BD_ADDRESS;
     for (auto i=0U; i < MEM_DMA_BD_NUM; ++i)
       MEM_BD_ADDRESS.push_back(MEM_DMA_BD0_0 + i * MEM_DMA_BD_SIZE);
@@ -831,6 +884,11 @@ add_preemption_code(uint32_t col)
       if (it != SHIM_BD_ADDRESS.end())
       {
         clear_shimBD_address_bits(mc_code, offset);
+        if (large_addend)
+        {
+          log_info() << boost::format("Warning: addend (0x%x) > 32bit for shim_dma_48, baking into BD and patching with addend=0\n") % input.addend;
+          patch_shim48_addend(mc_code, offset, input.addend);
+        }
         if (!argname.empty())
         {
           // in case of scratchpad
@@ -962,10 +1020,12 @@ add_preemption_code(uint32_t col)
       auto type = pdi.get_optional<std::string>("type");
       if (type && !type.get().compare(pm_ctrlpkt_type))
       {
-        kernel_map[kernel].add_common_data(get_pmctrlpkt_name(id), readfile(pdi.get<std::string>("PDI_file"), paths));
+        std::vector<char> data = m_artifacts->get(pdi.get<std::string>("PDI_file"),paths);
+        kernel_map[kernel].add_common_data(get_pmctrlpkt_name(id), data);
         kernel_map[kernel].add_pm_id(id);
       } else {
-        kernel_map[kernel].add_common_data(get_pdi_name(id), readfile(pdi.get<std::string>("PDI_file"), paths));
+        std::vector<char> data = m_artifacts->get(pdi.get<std::string>("PDI_file"), paths);
+        kernel_map[kernel].add_common_data(get_pdi_name(id), data);
         kernel_map[kernel].add_pdi_id(get_pdi_name(id));
       }
     }
@@ -977,18 +1037,18 @@ add_preemption_code(uint32_t col)
   {
     for (const auto& [unused, pic] : pinstance)
     {
-      std::string tname = pic.get<std::string>("id");
-      //m_data[tname] = std::move(readfile(pic.get<std::string>("TXN_ctrl_code_file")));
-      auto txn_code = readfile(pic.get<std::string>("TXN_ctrl_code_file"), paths);
-      std::vector<char> ctrl_pkt_code;
-      if (!pic.get<std::string>("ctrl_packet_file", "").empty())
-        ctrl_pkt_code = readfile(pic.get<std::string>("ctrl_packet_file"), paths);
-
       std::vector<char> jdata;
-      if (!pic.get<std::string>("patch_info_file", "").empty())
-        jdata = readfile(pic.get<std::string>("patch_info_file"), paths);
+      std::vector<char> ctrl_pkt_code;
+      std::vector<char> txn_code;
 
+      std::string tname = pic.get<std::string>("id");
+      txn_code = m_artifacts->get(pic.get<std::string>("TXN_ctrl_code_file"), paths);
+      if (!pic.get<std::string>("ctrl_packet_file", "").empty())
+        ctrl_pkt_code =  m_artifacts->get(pic.get<std::string>("ctrl_packet_file"), paths);
+      if (!pic.get<std::string>("patch_info_file", "").empty())
+        jdata = m_artifacts->get(pic.get<std::string>("patch_info_file"), paths);
       auto instance = std::make_shared<aie2_blob_transaction_preprocessor_input>();
+
       kernel_map[kernel].add_instance(tname, instance);
       instance->set_args(txn_code, jdata, ctrl_pkt_code, {}, {}, kernel_map[kernel].get_pm_id_list(), kernel_map[kernel].get_pdi_id_list());
     }
@@ -1000,6 +1060,9 @@ add_preemption_code(uint32_t col)
   {
     boost::property_tree::ptree pt;
     boost::property_tree::read_json(patch_json, pt);
+
+    // Parse global-level custom_section
+    m_global_custom_sections.assign(parse_custom_sections(pt, paths, m_artifacts));
 
     const auto& pt_xrt_kernel_instance = pt.get_child_optional("xrt-kernels");
     if (!pt_xrt_kernel_instance)
@@ -1025,7 +1088,7 @@ add_preemption_code(uint32_t col)
         const auto& pdis = pt_pdis.get();
         add_pdi(mangled_name, pdis, paths);
       } else {
-        std::cout << "PDIs not found\n";
+        log_warn() << "PDIs not found\n";
       }
 
       const auto& pt_instance = ctrlcode.get_child_optional("instance");
@@ -1033,7 +1096,7 @@ add_preemption_code(uint32_t col)
         const auto& pinstance = pt_instance.get();
         add_instance(mangled_name, pinstance, paths);
       } else {
-        std::cout << "instance not found\n";
+        log_warn() << "instance not found\n";
       }
     }
   }
